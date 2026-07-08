@@ -41,6 +41,7 @@ class OpenAICompatClient:
             "model": model,
             "messages": messages,
             "temperature": temperature,
+            "reasoning_effort": "none",
         }
         if response_format:
             payload["response_format"] = response_format

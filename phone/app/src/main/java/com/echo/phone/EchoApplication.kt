@@ -28,6 +28,7 @@ class EchoApplication : Application() {
 
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val isRecording = AtomicBoolean(false)
+    private var lastClickTime = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -58,6 +59,10 @@ class EchoApplication : Application() {
     }
 
     private suspend fun handleClick() {
+        val now = System.currentTimeMillis()
+        if (now - lastClickTime < 600) return  // 600ms 防抖
+        lastClickTime = now
+
         if (isRecording.get()) {
             withContext(Dispatchers.IO) {
                 try {

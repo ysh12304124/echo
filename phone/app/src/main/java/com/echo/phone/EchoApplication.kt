@@ -28,7 +28,7 @@ class EchoApplication : Application() {
 
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val isRecording = AtomicBoolean(false)
-    private var lastClickTime = 0L
+    private var lastActionTime = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -45,24 +45,21 @@ class EchoApplication : Application() {
     private fun startGlassKeyListener() {
         appScope.launch {
             glassesConnection.keyEvents.collect { action ->
-                Log.d("EchoApp", "GlassKey: $action recording=${isRecording.get()}")
+                Log.d("EchoApp", "GlassKey: action recording=" + isRecording.get())
+                val now = System.currentTimeMillis()
+                if (now - lastActionTime < 500) return@collect
+                lastActionTime = now
                 when (action) {
-                    GlassKeyAction.CLICK -> handleClick()
-                    GlassKeyAction.DOUBLE_CLICK -> handleDoubleClick()
-                    GlassKeyAction.LONG_PRESS -> handleLongPress()
-                    GlassKeyAction.SWIPE_FORWARD,
-                    GlassKeyAction.SWIPE_BACK,
-                    GlassKeyAction.OTHER -> { /* skip */ }
+                    GlassKeyAction.TWO_FINGER_SINGLE_TAP -> handleToggle()
+                    GlassKeyAction.TWO_FINGER_DOUBLE_TAP -> handlePause()
+                    GlassKeyAction.TWO_FINGER_SWIPE_FORWARD -> handleMark()
+                    else -> { }
                 }
             }
         }
     }
 
-    private suspend fun handleClick() {
-        val now = System.currentTimeMillis()
-        if (now - lastClickTime < 600) return  // 600ms 防抖
-        lastClickTime = now
-
+    private suspend fun handleToggle() {
         if (isRecording.get()) {
             withContext(Dispatchers.IO) {
                 try {
@@ -86,7 +83,7 @@ class EchoApplication : Application() {
         }
     }
 
-    private suspend fun handleDoubleClick() {
+    private suspend fun handlePause() {
         if (!isRecording.get()) return
         withContext(Dispatchers.IO) {
             try {
@@ -97,7 +94,7 @@ class EchoApplication : Application() {
         }
     }
 
-    private suspend fun handleLongPress() {
+    private suspend fun handleMark() {
         if (!isRecording.get()) return
         withContext(Dispatchers.IO) {
             try {

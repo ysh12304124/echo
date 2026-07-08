@@ -139,10 +139,18 @@ data class MediaAudio(val data: ByteArray, val timestampMs: Long)
  * 手机端据自身录制状态映射为开始/停止/标记等语义。
  */
 enum class GlassKeyAction {
+    /** 触控板单指单击（镜腿按键，系统保留用于进/出 App，应用层不依赖） */
     CLICK,
+    /** 触控板单指双击（系统保留用于退出 App） */
     DOUBLE_CLICK,
     LONG_PRESS,
     SWIPE_FORWARD,
     SWIPE_BACK,
+    /** 触控板双指单击 —— 开始/停止录制 */
+    TWO_FINGER_SINGLE_TAP,
+    /** 触控板双指双击 —— 暂停/恢复 */
+    TWO_FINGER_DOUBLE_TAP,
+    /** 触控板双指前滑 —— 标记瞬间 */
+    TWO_FINGER_SWIPE_FORWARD,
     OTHER,
 }

@@ -20,6 +20,7 @@ data class MemorySummary(
     val title: String = "",
     val scene: TimeScene? = null,
     val partition: DataPartition? = null,
+    val startedAt: String? = null,
     val durationSeconds: Int = 0,
     val evidenceStatus: String = "pending",
     val isFavorited: Boolean = false,

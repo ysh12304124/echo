@@ -159,7 +159,12 @@ private fun MemoryCard(memory: MemorySummary, onClick: () -> Unit) {
             Spacer(Modifier.height(4.dp))
             Text(
                 buildString {
-                    memory.scene?.let { append(it.name) }
+                    memory.startedAt?.let {
+                        // display as HH:mm  e.g. "14:30"
+                        val t = it.substringAfter("T").substringBefore(".")
+                        if (t.length >= 5) append(t.substring(0, 5))
+                    }
+                    memory.scene?.let { append(" " + it.name) }
                     append(" · ")
                     append(memory.status.name)
                     if (memory.durationSeconds > 0) append(" · ${memory.durationSeconds}s")

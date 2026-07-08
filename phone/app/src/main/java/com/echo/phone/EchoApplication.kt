@@ -46,51 +46,59 @@ class EchoApplication : Application() {
             glassesConnection.keyEvents.collect { action ->
                 Log.d("EchoApp", "GlassKey: $action recording=${isRecording.get()}")
                 when (action) {
-                    GlassKeyAction.CLICK -> {
-                        if (isRecording.get()) {
-                            withContext(Dispatchers.IO) {
-                                try {
-                                    recordingController.stopAndComplete()
-                                    isRecording.set(false)
-                                } catch (e: Exception) {
-                                    Log.e("EchoApp", "stop failed", e)
-                                }
-                            }
-                        } else {
-                            withContext(Dispatchers.IO) {
-                                try {
-                                    recordingController.startTime(
-                                        TimeScene.MEETING, DataPartition.WORK, "会议记录"
-                                    )
-                                    isRecording.set(true)
-                                } catch (e: Exception) {
-                                    Log.e("EchoApp", "start failed", e)
-                                }
-                            }
-                        }
-                    }
-                    GlassKeyAction.DOUBLE_CLICK -> {
-                        withContext(Dispatchers.IO) {
-                            try {
-                                if (isRecording.get()) { recordingController.pause() }
-                            } catch (e: Exception) {
-                                Log.e("EchoApp", "pause failed", e)
-                            }
-                        }
-                    }
-                    GlassKeyAction.LONG_PRESS -> {
-                        withContext(Dispatchers.IO) {
-                            try {
-                                if (isRecording.get()) { recordingController.markKeyMoment() }
-                            } catch (e: Exception) {
-                                Log.e("EchoApp", "markKeyMoment failed", e)
-                            }
-                        }
-                    }
+                    GlassKeyAction.CLICK -> handleClick()
+                    GlassKeyAction.DOUBLE_CLICK -> handleDoubleClick()
+                    GlassKeyAction.LONG_PRESS -> handleLongPress()
                     GlassKeyAction.SWIPE_FORWARD,
                     GlassKeyAction.SWIPE_BACK,
                     GlassKeyAction.OTHER -> { /* skip */ }
                 }
+            }
+        }
+    }
+
+    private suspend fun handleClick() {
+        if (isRecording.get()) {
+            withContext(Dispatchers.IO) {
+                try {
+                    recordingController.stopAndComplete()
+                    isRecording.set(false)
+                } catch (e: Exception) {
+                    Log.e("EchoApp", "stop failed", e)
+                }
+            }
+        } else {
+            withContext(Dispatchers.IO) {
+                try {
+                    recordingController.startTime(
+                        TimeScene.MEETING, DataPartition.WORK, "会议记录"
+                    )
+                    isRecording.set(true)
+                } catch (e: Exception) {
+                    Log.e("EchoApp", "start failed", e)
+                }
+            }
+        }
+    }
+
+    private suspend fun handleDoubleClick() {
+        if (!isRecording.get()) return
+        withContext(Dispatchers.IO) {
+            try {
+                recordingController.pause()
+            } catch (e: Exception) {
+                Log.e("EchoApp", "pause failed", e)
+            }
+        }
+    }
+
+    private suspend fun handleLongPress() {
+        if (!isRecording.get()) return
+        withContext(Dispatchers.IO) {
+            try {
+                recordingController.markKeyMoment()
+            } catch (e: Exception) {
+                Log.e("EchoApp", "markKeyMoment failed", e)
             }
         }
     }

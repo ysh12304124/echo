@@ -1,0 +1,501 @@
+from __future__ import annotations
+
+from typing import Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.domain.enums import BindingType, DataPartition, MemoryStatus, MemoryType, TimeScene
+from app.domain.models import SpaceMemory, TimeMemory
+from app.providers import get_provider_factory
+from app.repositories.database import get_db
+from app.repositories.memory_repo import MemoryRepository
+from app.schemas import (
+    BindingListResponse,
+    BindingResponse,
+    CreateSessionRequest,
+    EntityListResponse,
+    EntitySummaryResponse,
+    ExportResultResponse,
+    IngestSessionResponse,
+    MemoryListResponse,
+    MemorySummaryResponse,
+    PersonDetailResponse,
+    PersonListResponse,
+    PersonSummaryResponse,
+    QueryRequest,
+    QueryResponse,
+    SpaceListResponse,
+    SpaceMemoryDetailResponse,
+    SpaceAnchorResponse,
+    SplitPersonRequest,
+    TimeMemoryDetailResponse,
+    UpdateMemoryRequest,
+    UpdatePersonRequest,
+    UpdateSpaceRequest,
+    UploadAckResponse,
+)
+from app.services.ingest_pipeline import IngestPipeline
+from app.services.person_service import PersonService
+from app.services.query_engine import QueryEngine
+
+
+class ExportQueryRequest(BaseModel):
+    query_id: UUID
+
+router = APIRouter()
+
+
+def get_repo(db: AsyncSession = Depends(get_db)) -> MemoryRepository:
+    return MemoryRepository(db)
+
+
+# --- Ingest ---
+
+@router.post("/ingest/sessions", response_model=IngestSessionResponse, status_code=201)
+async def create_session(req: CreateSessionRequest, repo: MemoryRepository = Depends(get_repo)):
+    pipeline = IngestPipeline(repo)
+    try:
+        session = await pipeline.create_session(
+            memory_type=req.memory_type,
+            scene=req.scene,
+            partition=req.partition,
+            title=req.title,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return IngestSessionResponse(
+        session_id=session.id,
+        memory_type=session.memory_type,
+        scene=session.scene,
+        partition=session.partition,
+        status=session.status,
+        created_at=session.created_at,
+    )
+
+
+@router.post("/ingest/sessions/{session_id}/frames", response_model=UploadAckResponse, status_code=201)
+async def upload_frame(
+    session_id: UUID,
+    file: UploadFile = File(...),
+    timestamp_ms: int = Form(...),
+    is_key_moment: bool = Form(False),
+    repo: MemoryRepository = Depends(get_repo),
+):
+    pipeline = IngestPipeline(repo)
+    data = await file.read()
+    try:
+        frame_id, accepted, filtered = await pipeline.upload_frame(
+            session_id, data, timestamp_ms, is_key_moment
+        )
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return UploadAckResponse(id=frame_id, accepted=accepted, filtered=filtered)
+
+
+@router.post("/ingest/sessions/{session_id}/audio", response_model=UploadAckResponse, status_code=201)
+async def upload_audio(
+    session_id: UUID,
+    file: UploadFile = File(...),
+    timestamp_ms: int = Form(...),
+    repo: MemoryRepository = Depends(get_repo),
+):
+    pipeline = IngestPipeline(repo)
+    data = await file.read()
+    try:
+        audio_id = await pipeline.upload_audio(session_id, data, timestamp_ms)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return UploadAckResponse(id=audio_id, accepted=True, filtered=False)
+
+
+@router.post("/ingest/sessions/{session_id}/complete", response_model=MemorySummaryResponse)
+async def complete_session(session_id: UUID, repo: MemoryRepository = Depends(get_repo)):
+    pipeline = IngestPipeline(repo)
+    try:
+        memory = await pipeline.complete_session(session_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+    if isinstance(memory, SpaceMemory):
+        return MemorySummaryResponse(
+            memory_id=memory.id,
+            memory_type=MemoryType.SPACE,
+            status=memory.status,
+            identify_brief=memory.identify_brief,
+            title=memory.title,
+        )
+    return MemorySummaryResponse(
+        memory_id=memory.id,
+        memory_type=MemoryType.TIME,
+        status=memory.status,
+        identify_brief=memory.identify_brief,
+        title=memory.title,
+        scene=memory.scene,
+        partition=memory.partition,
+    )
+
+
+# --- Memories ---
+
+@router.get("/memories", response_model=MemoryListResponse)
+async def list_memories(
+    partition: Optional[DataPartition] = None,
+    scene: Optional[TimeScene] = None,
+    status: Optional[MemoryStatus] = None,
+    limit: int = 20,
+    offset: int = 0,
+    repo: MemoryRepository = Depends(get_repo),
+):
+    memories, total = await repo.list_time_memories(partition, scene, status, limit, offset)
+    items = [
+        MemorySummaryResponse(
+            memory_id=m.id,
+            memory_type=MemoryType.TIME,
+            status=m.status,
+            identify_brief=m.identify_brief,
+            title=m.title,
+            scene=m.scene,
+            partition=m.partition,
+            started_at=m.started_at,
+            duration_seconds=m.duration_seconds,
+            evidence_status=m.evidence_status,
+            is_favorited=m.is_favorited,
+        )
+        for m in memories
+    ]
+    return MemoryListResponse(items=items, total=total)
+
+
+@router.get("/memories/{memory_id}", response_model=TimeMemoryDetailResponse)
+async def get_memory(memory_id: UUID, repo: MemoryRepository = Depends(get_repo)):
+    memory = await repo.get_time_memory(memory_id)
+    if not memory:
+        raise HTTPException(404, "Memory not found")
+    return TimeMemoryDetailResponse(
+        memory_id=memory.id,
+        title=memory.title,
+        scene=memory.scene,
+        partition=memory.partition,
+        status=memory.status,
+        started_at=memory.started_at,
+        ended_at=memory.ended_at,
+        duration_seconds=memory.duration_seconds,
+        identify_brief=memory.identify_brief,
+        navigation_summary=memory.navigation_summary,
+        evidence_status=memory.evidence_status,
+        is_favorited=memory.is_favorited,
+        is_locked=memory.is_locked,
+    )
+
+
+@router.patch("/memories/{memory_id}", response_model=TimeMemoryDetailResponse)
+async def update_memory(
+    memory_id: UUID,
+    req: UpdateMemoryRequest,
+    repo: MemoryRepository = Depends(get_repo),
+):
+    updates = req.model_dump(exclude_unset=True)
+    memory = await repo.update_time_memory(memory_id, **updates)
+    if not memory:
+        raise HTTPException(404, "Memory not found")
+    return await get_memory(memory_id, repo)
+
+
+@router.delete("/memories/{memory_id}", status_code=204)
+async def delete_memory(memory_id: UUID, repo: MemoryRepository = Depends(get_repo)):
+    memory = await repo.get_time_memory(memory_id)
+    if not memory:
+        raise HTTPException(404, "Memory not found")
+    if memory.is_locked:
+        raise HTTPException(400, "记忆已锁定，无法删除")
+    # 级联：删除关联证据的媒体文件与向量索引。
+    factory = get_provider_factory()
+    blob = factory.blob_store()
+    vector = factory.vector_store()
+    for ev in await repo.list_evidences(memory_id):
+        if ev.media_path:
+            key = ev.media_path.split("/blobs/", 1)[-1]
+            await blob.delete(key)
+    try:
+        await vector.delete_by_filter({"memory_id": str(memory_id)})
+    except NotImplementedError:
+        pass
+    await repo.delete_time_memory(memory_id)
+
+
+# --- Spaces ---
+
+@router.get("/spaces", response_model=SpaceListResponse)
+async def list_spaces(
+    partition: Optional[DataPartition] = None,
+    repo: MemoryRepository = Depends(get_repo),
+):
+    spaces, total = await repo.list_space_memories(partition)
+    items = [
+        SpaceMemoryDetailResponse(
+            space_id=s.id,
+            title=s.title,
+            partition=s.partition,
+            status=s.status,
+            quality=s.quality,
+            model_url=s.model_url,
+            anchors=[
+                SpaceAnchorResponse(
+                    anchor_id=a.id,
+                    name=a.name,
+                    anchor_type=a.anchor_type,
+                    position=a.position,
+                )
+                for a in s.anchors
+            ],
+            captured_at=s.captured_at,
+            is_favorited=s.is_favorited,
+            identify_brief=s.identify_brief,
+        )
+        for s in spaces
+    ]
+    return SpaceListResponse(items=items, total=total)
+
+
+@router.get("/spaces/{space_id}", response_model=SpaceMemoryDetailResponse)
+async def get_space(space_id: UUID, repo: MemoryRepository = Depends(get_repo)):
+    space = await repo.get_space_memory(space_id)
+    if not space:
+        raise HTTPException(404, "Space not found")
+    return SpaceMemoryDetailResponse(
+        space_id=space.id,
+        title=space.title,
+        partition=space.partition,
+        status=space.status,
+        quality=space.quality,
+        model_url=space.model_url,
+        anchors=[
+            SpaceAnchorResponse(
+                anchor_id=a.id,
+                name=a.name,
+                anchor_type=a.anchor_type,
+                position=a.position,
+            )
+            for a in space.anchors
+        ],
+        captured_at=space.captured_at,
+        is_favorited=space.is_favorited,
+        identify_brief=space.identify_brief,
+    )
+
+
+@router.patch("/spaces/{space_id}", response_model=SpaceMemoryDetailResponse)
+async def update_space(
+    space_id: UUID,
+    req: UpdateSpaceRequest,
+    repo: MemoryRepository = Depends(get_repo),
+):
+    space = await repo.get_space_memory(space_id)
+    if not space:
+        raise HTTPException(404, "Space not found")
+    await repo.update_space_memory(space_id, **req.model_dump(exclude_unset=True))
+    return await get_space(space_id, repo)
+
+
+@router.delete("/spaces/{space_id}", status_code=204)
+async def delete_space(space_id: UUID, repo: MemoryRepository = Depends(get_repo)):
+    space = await repo.get_space_memory(space_id)
+    if not space:
+        raise HTTPException(404, "Space not found")
+    factory = get_provider_factory()
+    blob = factory.blob_store()
+    if space.model_url:
+        key = space.model_url.split("/media/", 1)[-1]
+        await blob.delete(key)
+    await repo.delete_space_memory(space_id)
+
+
+# --- Time-Space Bindings ---
+
+@router.get("/memories/{memory_id}/bindings", response_model=BindingListResponse)
+async def list_memory_bindings(memory_id: UUID, repo: MemoryRepository = Depends(get_repo)):
+    bindings = await repo.list_bindings(time_memory_id=memory_id)
+    items = [
+        BindingResponse(
+            binding_id=b.id,
+            binding_type=b.binding_type.value,
+            time_memory_id=b.time_memory_id,
+            space_memory_id=b.space_memory_id,
+            confidence=b.confidence,
+            user_confirmed=b.user_confirmed,
+        )
+        for b in bindings
+    ]
+    return BindingListResponse(items=items, total=len(items))
+
+
+@router.post("/bindings/{binding_id}/confirm", response_model=BindingResponse)
+async def confirm_binding(binding_id: UUID, repo: MemoryRepository = Depends(get_repo)):
+    binding = await repo.get_binding(binding_id)
+    if not binding:
+        raise HTTPException(404, "Binding not found")
+    updated = await repo.update_binding(
+        binding_id, binding_type=BindingType.MEMORY_LEVEL, user_confirmed=True
+    )
+    return BindingResponse(
+        binding_id=updated.id,
+        binding_type=updated.binding_type.value,
+        time_memory_id=updated.time_memory_id,
+        space_memory_id=updated.space_memory_id,
+        confidence=updated.confidence,
+        user_confirmed=updated.user_confirmed,
+    )
+
+
+@router.post("/bindings/{binding_id}/reject", status_code=204)
+async def reject_binding(binding_id: UUID, repo: MemoryRepository = Depends(get_repo)):
+    binding = await repo.get_binding(binding_id)
+    if not binding:
+        raise HTTPException(404, "Binding not found")
+    await repo.delete_binding(binding_id)
+
+
+# --- Entities ---
+
+@router.get("/entities", response_model=EntityListResponse)
+async def list_entities(
+    partition: Optional[DataPartition] = None,
+    entity_type: Optional[str] = None,
+    repo: MemoryRepository = Depends(get_repo),
+):
+    entities = await repo.list_entities(partition, entity_type)
+    items = [
+        EntitySummaryResponse(
+            entity_id=e.id,
+            name=e.name,
+            entity_type=e.entity_type,
+            confidence=e.confidence,
+            memory_count=len(e.memory_ids),
+        )
+        for e in entities
+    ]
+    return EntityListResponse(items=items, total=len(items))
+
+
+# --- Media ---
+
+@router.get("/media/{key:path}")
+async def get_media(key: str):
+    blob = get_provider_factory().blob_store()
+    path = await blob.get_path(key)
+    if not path:
+        raise HTTPException(404, "Media not found")
+    return FileResponse(path)
+
+
+# --- Query ---
+
+@router.post("/query", response_model=QueryResponse)
+async def query(req: QueryRequest, repo: MemoryRepository = Depends(get_repo)):
+    engine = QueryEngine(repo)
+    return await engine.query(req.question, req.scope, req.memory_id, req.space_id)
+
+
+# --- Persons ---
+
+@router.get("/persons", response_model=PersonListResponse)
+async def list_persons(
+    partition: Optional[DataPartition] = None,
+    repo: MemoryRepository = Depends(get_repo),
+):
+    service = PersonService(repo)
+    persons = await service.list_persons(partition)
+    items = [
+        PersonSummaryResponse(
+            person_id=p.id,
+            name=p.name,
+            role=p.role,
+            memory_count=len(p.memory_ids),
+        )
+        for p in persons
+    ]
+    return PersonListResponse(items=items, total=len(items))
+
+
+@router.get("/persons/{person_id}", response_model=PersonDetailResponse)
+async def get_person(person_id: UUID, repo: MemoryRepository = Depends(get_repo)):
+    service = PersonService(repo)
+    person = await service.get_person(person_id)
+    if not person:
+        raise HTTPException(404, "Person not found")
+    return PersonDetailResponse(
+        person_id=person.id,
+        name=person.name,
+        role=person.role,
+        notes=person.notes,
+        related_memories=person.memory_ids,
+    )
+
+
+@router.patch("/persons/{person_id}", response_model=PersonDetailResponse)
+async def update_person(
+    person_id: UUID,
+    req: UpdatePersonRequest,
+    repo: MemoryRepository = Depends(get_repo),
+):
+    service = PersonService(repo)
+    try:
+        person = await service.update_person(
+            person_id,
+            name=req.name,
+            role=req.role,
+            notes=req.notes,
+            merge_with_id=req.merge_with_id,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not person:
+        raise HTTPException(404, "Person not found")
+    return await get_person(person.id, repo)
+
+
+@router.post("/persons/{person_id}/split", response_model=PersonDetailResponse)
+async def split_person(
+    person_id: UUID,
+    req: SplitPersonRequest,
+    repo: MemoryRepository = Depends(get_repo),
+):
+    service = PersonService(repo)
+    try:
+        new_person = await service.split_person(person_id, req.memory_ids, req.new_name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not new_person:
+        raise HTTPException(404, "Person not found")
+    return PersonDetailResponse(
+        person_id=new_person.id,
+        name=new_person.name,
+        role=new_person.role,
+        notes=new_person.notes,
+        related_memories=new_person.memory_ids,
+    )
+
+
+@router.delete("/persons/{person_id}", status_code=204)
+async def delete_person_route(person_id: UUID, repo: MemoryRepository = Depends(get_repo)):
+    service = PersonService(repo)
+    if not await service.delete_person(person_id):
+        raise HTTPException(404, "Person not found")
+
+
+# --- Export ---
+
+@router.post("/export/query-result", response_model=ExportResultResponse)
+async def export_query_result(
+    req: ExportQueryRequest,
+    repo: MemoryRepository = Depends(get_repo),
+):
+    log = await repo.get_query_log(req.query_id)
+    if not log:
+        raise HTTPException(404, "Query not found")
+    from uuid import uuid4
+    return ExportResultResponse(export_id=uuid4(), content=log)

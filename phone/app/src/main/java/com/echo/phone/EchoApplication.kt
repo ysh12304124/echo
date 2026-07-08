@@ -72,7 +72,7 @@ class EchoApplication : Application() {
                     GlassKeyAction.DOUBLE_CLICK -> {
                         withContext(Dispatchers.IO) {
                             try {
-                                if (isRecording.get()) recordingController.pause()
+                                if (isRecording.get()) { recordingController.pause() }
                             } catch (e: Exception) {
                                 Log.e("EchoApp", "pause failed", e)
                             }
@@ -81,7 +81,7 @@ class EchoApplication : Application() {
                     GlassKeyAction.LONG_PRESS -> {
                         withContext(Dispatchers.IO) {
                             try {
-                                if (isRecording.get()) recordingController.markKeyMoment()
+                                if (isRecording.get()) { recordingController.markKeyMoment() }
                             } catch (e: Exception) {
                                 Log.e("EchoApp", "markKeyMoment failed", e)
                             }

@@ -12,16 +12,6 @@ import com.echo.glasses.receiver.KeyType
 import com.rokid.cxr.CXRServiceBridge
 import com.rokid.cxr.Caps
 
-/**
- * 眼镜端 Echo CustomApp 入口（CXR-S 轻量应用）。
- *
- * 职责：
- * 1) subscribe("rk_custom_client") 接收手机端状态并显示。
- * 2) 捕获触控板手势（TWO_FINGER_*）经 sendMessage("rk_custom_key") 上报手机；
- *    镜腿物理按键（CLICK/DOUBLE_CLICK）留给系统导航，不做录制控制。
- *
- * 采集（音频/拍照）由眼镜固件经 CXR-L 直达手机，本 App 不采集媒体。
- */
 class MainActivity : AppCompatActivity() {
 
     private companion object {
@@ -32,7 +22,6 @@ class MainActivity : AppCompatActivity() {
 
     private val bridge = CXRServiceBridge()
     private lateinit var statusText: TextView
-    private var phoneStatus = ""
 
     private val keyReceiver = KeyReceiver(KeyEventListener { keyType -> reportKey(keyType) })
 
@@ -53,10 +42,7 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(name: String?, args: Caps?, bytes: ByteArray?) {
             val text = args?.let { readLastString(it) }.orEmpty()
             Log.d(TAG, "onReceive text=$text")
-            if (text.isNotBlank()) {
-                phoneStatus = text
-                runOnUiThread { showStatus(text) }
-            }
+            if (text.isNotBlank()) runOnUiThread { showStatus(text) }
         }
     }
 
@@ -67,18 +53,14 @@ class MainActivity : AppCompatActivity() {
         showStatus("待机")
 
         findViewById<Button>(R.id.btnToggle).setOnClickListener {
-            reportKey(KeyType.TWO_FINGER_SINGLE_TAP)
+            reportKey(KeyType.CLICK)
         }
 
         bridge.setStatusListener(statusListener)
         bridge.subscribe(CLIENT_KEY, msgCallback)
 
         registerReceiver(keyReceiver, IntentFilter().apply {
-            // 仅注册触控板手势，不注册镜腿按键（留给系统导航）
-            addAction(KeyType.TWO_FINGER_SINGLE_TAP.action)
-            addAction(KeyType.TWO_FINGER_DOUBLE_TAP.action)
-            addAction(KeyType.TWO_FINGER_SWIPE_FORWARD.action)
-            addAction(KeyType.TWO_FINGER_SWIPE_BACK.action)
+            addAction(KeyType.CLICK.action)
         })
     }
 
@@ -87,14 +69,12 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    /** 手势上报：Caps 首值标签 "action"，次值为动作名。 */
     private fun reportKey(keyType: KeyType) {
         Log.d(TAG, "reportKey ${keyType.name}")
         bridge.sendMessage(CMD_KEY, Caps().apply {
             write("action")
             write(keyType.name)
         })
-        // 不覆盖 status —— 保持手机端下发的状态显示
     }
 
     private fun showStatus(text: String) {

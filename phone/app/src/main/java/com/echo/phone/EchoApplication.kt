@@ -28,7 +28,7 @@ class EchoApplication : Application() {
 
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val isRecording = AtomicBoolean(false)
-    private var lastActionTime = 0L
+    private var lastToggleTime = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -45,16 +45,11 @@ class EchoApplication : Application() {
     private fun startGlassKeyListener() {
         appScope.launch {
             glassesConnection.keyEvents.collect { action ->
-                Log.d("EchoApp", "GlassKey: action recording=" + isRecording.get())
+                if (action != GlassKeyAction.CLICK) return@collect
                 val now = System.currentTimeMillis()
-                if (now - lastActionTime < 500) return@collect
-                lastActionTime = now
-                when (action) {
-                    GlassKeyAction.TWO_FINGER_SINGLE_TAP -> handleToggle()
-                    GlassKeyAction.TWO_FINGER_DOUBLE_TAP -> handlePause()
-                    GlassKeyAction.TWO_FINGER_SWIPE_FORWARD -> handleMark()
-                    else -> { }
-                }
+                if (now - lastToggleTime < 800) return@collect
+                lastToggleTime = now
+                handleToggle()
             }
         }
     }
@@ -79,28 +74,6 @@ class EchoApplication : Application() {
                 } catch (e: Exception) {
                     Log.e("EchoApp", "start failed", e)
                 }
-            }
-        }
-    }
-
-    private suspend fun handlePause() {
-        if (!isRecording.get()) return
-        withContext(Dispatchers.IO) {
-            try {
-                recordingController.pause()
-            } catch (e: Exception) {
-                Log.e("EchoApp", "pause failed", e)
-            }
-        }
-    }
-
-    private suspend fun handleMark() {
-        if (!isRecording.get()) return
-        withContext(Dispatchers.IO) {
-            try {
-                recordingController.markKeyMoment()
-            } catch (e: Exception) {
-                Log.e("EchoApp", "markKeyMoment failed", e)
             }
         }
     }

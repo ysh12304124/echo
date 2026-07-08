@@ -1,15 +1,22 @@
 package com.echo.phone
 
 import android.app.Application
+import android.util.Log
 import com.echo.phone.data.EchoRepository
 import com.echo.phone.data.RecordingController
 import com.echo.phone.data.api.ApiClient
 import com.echo.phone.data.glasses.GlassesConnection
 import com.echo.phone.data.glasses.MockGlassesConnection
 import com.echo.phone.data.glasses.cxr.CxrGlassesConnection
+import com.echo.phone.domain.DataPartition
+import com.echo.phone.domain.GlassKeyAction
+import com.echo.phone.domain.TimeScene
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 
 class EchoApplication : Application() {
     lateinit var repository: EchoRepository
@@ -20,17 +27,71 @@ class EchoApplication : Application() {
         private set
 
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val isRecording = AtomicBoolean(false)
 
     override fun onCreate() {
         super.onCreate()
         repository = EchoRepository(ApiClient.service)
-        // USE_MOCK_GLASSES=true：无真机离线开发，用 Mock 周期产生合成帧/音频。
-        // false：接真实 Rokid CXR-L 眼镜（鉴权/会话/音频/拍照/按键由眼镜经 CXR-L 送达）。
         glassesConnection = if (BuildConfig.USE_MOCK_GLASSES) {
             MockGlassesConnection(appScope)
         } else {
             CxrGlassesConnection(applicationContext, appScope)
         }
         recordingController = RecordingController(repository, glassesConnection, appScope)
+        startGlassKeyListener()
+    }
+
+    private fun startGlassKeyListener() {
+        appScope.launch {
+            glassesConnection.keyEvents.collect { action ->
+                Log.d("EchoApp", "GlassKey: $action recording=${isRecording.get()}")
+                when (action) {
+                    GlassKeyAction.CLICK -> {
+                        if (isRecording.get()) {
+                            withContext(Dispatchers.IO) {
+                                try {
+                                    recordingController.stopAndComplete()
+                                    isRecording.set(false)
+                                } catch (e: Exception) {
+                                    Log.e("EchoApp", "stop failed", e)
+                                }
+                            }
+                        } else {
+                            withContext(Dispatchers.IO) {
+                                try {
+                                    recordingController.startTime(
+                                        TimeScene.MEETING, DataPartition.WORK, "会议记录"
+                                    )
+                                    isRecording.set(true)
+                                } catch (e: Exception) {
+                                    Log.e("EchoApp", "start failed", e)
+                                }
+                            }
+                        }
+                    }
+                    GlassKeyAction.DOUBLE_CLICK -> {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                if (isRecording.get()) recordingController.pause()
+                            } catch (e: Exception) {
+                                Log.e("EchoApp", "pause failed", e)
+                            }
+                        }
+                    }
+                    GlassKeyAction.LONG_PRESS -> {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                if (isRecording.get()) recordingController.markKeyMoment()
+                            } catch (e: Exception) {
+                                Log.e("EchoApp", "markKeyMoment failed", e)
+                            }
+                        }
+                    }
+                    GlassKeyAction.SWIPE_FORWARD,
+                    GlassKeyAction.SWIPE_BACK,
+                    GlassKeyAction.OTHER -> { /* skip */ }
+                }
+            }
+        }
     }
 }

@@ -1,14 +1,17 @@
 package com.echo.phone.ui.query
 
+import androidx.compose.animation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -49,6 +52,12 @@ private fun evidenceIcon(type: EvidenceType): ImageVector = when (type) {
     EvidenceType.USER_NOTE -> Icons.Default.Notes
 }
 
+private fun resultCardColor(status: QueryResultStatus) = when (status) {
+    QueryResultStatus.CONFIRMED -> Color(0xFF1B5E7B).copy(alpha = 0.12f)
+    QueryResultStatus.POSSIBLE -> Color(0xFFF59E0B).copy(alpha = 0.12f)
+    QueryResultStatus.NOT_FOUND -> Color(0xFF9FB0CC).copy(alpha = 0.08f)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QueryScreen(onNavigateMemory: (String) -> Unit) {
@@ -66,7 +75,6 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
         Text("查询", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(12.dp))
 
-        // 范围筛选
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = vm.scope == QueryScope.GLOBAL_WORK, onClick = { vm.scope = QueryScope.GLOBAL_WORK }, label = { Text("全局工作") })
             FilterChip(selected = vm.scope == QueryScope.MEMORY, onClick = { vm.scope = QueryScope.MEMORY }, label = { Text("当前记忆") })
@@ -74,11 +82,13 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
         }
         Spacer(Modifier.height(12.dp))
 
-        // 查询框
         OutlinedTextField(
             value = vm.question,
             onValueChange = { vm.question = it },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().shadow(
+                if (vm.question.isNotEmpty()) 4.dp else 0.dp,
+                RoundedCornerShape(8.dp),
+            ),
             placeholder = { Text("例如：张经理承诺了什么？") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             trailingIcon = {
@@ -89,14 +99,29 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                 }
             },
             singleLine = true,
-            shape = MaterialTheme.shapes.medium,
+            shape = MaterialTheme.shapes.small,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+            ),
         )
         Spacer(Modifier.height(16.dp))
 
-        when {
-            vm.loading -> CircularProgressIndicator()
-            vm.error != null -> Text("查询失败: ${vm.error}", color = MaterialTheme.colorScheme.error)
-            vm.result != null -> QueryResultView(vm.result!!)
+        AnimatedContent(
+            targetState = when {
+                vm.loading -> "loading"
+                vm.error != null -> "error"
+                vm.result != null -> "result"
+                else -> "idle"
+            },
+            transitionSpec = { fadeIn(tween(250)) + slideInVertically(tween(250)) { it / 4 } togetherWith fadeOut(tween(150)) },
+            label = "queryResult",
+        ) { state ->
+            when (state) {
+                "loading" -> CircularProgressIndicator()
+                "error" -> Text("查询失败: ${vm.error}", color = MaterialTheme.colorScheme.error)
+                "result" -> QueryResultView(vm.result!!)
+                else -> {}
+            }
         }
     }
 }
@@ -111,9 +136,9 @@ private fun QueryResultView(result: QueryResult) {
             ) {
                 Column(Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("确定答案", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text("确定答案", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
                     }
                     Spacer(Modifier.height(8.dp))
                     Text(result.answer ?: "", style = MaterialTheme.typography.bodyLarge)
@@ -126,6 +151,12 @@ private fun QueryResultView(result: QueryResult) {
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
             ) {
                 Column(Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Warning, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("可能相关", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(8.dp))
                     Text("没有找到确定答案，但找到可能相关证据", style = MaterialTheme.typography.bodyMedium)
                     result.uncertaintyReason?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
@@ -145,7 +176,10 @@ private fun QueryResultView(result: QueryResult) {
         Text("证据", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         LazyColumn {
             items(result.evidences) { ev ->
-                Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Card(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                ) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
                         Icon(
                             evidenceIcon(ev.type), null,

@@ -2,6 +2,8 @@ package com.echo.phone.ui.query
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,7 +14,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -53,11 +57,10 @@ private fun evidenceIcon(type: EvidenceType): ImageVector = when (type) {
     EvidenceType.USER_NOTE -> Icons.Default.Notes
 }
 
-private fun resultCardColor(status: QueryResultStatus) = when (status) {
-    QueryResultStatus.CONFIRMED -> Color(0xFF1B5E7B).copy(alpha = 0.12f)
-    QueryResultStatus.POSSIBLE -> Color(0xFFF59E0B).copy(alpha = 0.12f)
-    QueryResultStatus.NOT_FOUND -> Color(0xFF9FB0CC).copy(alpha = 0.08f)
-}
+private val GlassBg = Brush.verticalGradient(
+    listOf(Color.White.copy(alpha = 0.08f), Color.White.copy(alpha = 0.04f))
+)
+private val GlassBorder = Color.White.copy(alpha = 0.10f)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,56 +75,49 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
         }
     )
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("查询", style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(12.dp))
+    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp).padding(top = 20.dp)) {
+        Text("查询", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface)
+        Spacer(Modifier.height(14.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = vm.scope == QueryScope.GLOBAL_WORK, onClick = { vm.scope = QueryScope.GLOBAL_WORK }, label = { Text("全局工作") })
-            FilterChip(selected = vm.scope == QueryScope.MEMORY, onClick = { vm.scope = QueryScope.MEMORY }, label = { Text("当前记忆") })
-            FilterChip(selected = vm.scope == QueryScope.SPACE, onClick = { vm.scope = QueryScope.SPACE }, label = { Text("当前空间") })
+            QueryScope.entries.forEach { s ->
+                FilterChip(
+                    selected = vm.scope == s,
+                    onClick = { vm.scope = s },
+                    label = { Text(when(s) { QueryScope.GLOBAL_WORK -> "全局工作"; QueryScope.MEMORY -> "当前记忆"; QueryScope.SPACE -> "当前空间" }) },
+                )
+            }
         }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(14.dp))
 
         OutlinedTextField(
             value = vm.question,
             onValueChange = { vm.question = it },
-            modifier = Modifier.fillMaxWidth().shadow(
-                if (vm.question.isNotEmpty()) 4.dp else 0.dp,
-                RoundedCornerShape(8.dp),
-            ),
+            modifier = Modifier.fillMaxWidth().shadow(if (vm.question.isNotEmpty()) 4.dp else 0.dp, RoundedCornerShape(10.dp)),
             placeholder = { Text("例如：张经理承诺了什么？") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             trailingIcon = {
-                if (vm.question.isNotBlank()) {
-                    IconButton(onClick = { vm.submit() }, enabled = !vm.loading) {
-                        Icon(Icons.Default.Send, "查询")
-                    }
-                }
+                if (vm.question.isNotBlank()) IconButton(onClick = { vm.submit() }, enabled = !vm.loading) { Icon(Icons.Default.Send, "查询") }
             },
             singleLine = true,
             shape = MaterialTheme.shapes.small,
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = MaterialTheme.colorScheme.primary,
-            ),
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary),
         )
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(20.dp))
 
         AnimatedContent(
-            targetState = when {
-                vm.loading -> "loading"
-                vm.error != null -> "error"
-                vm.result != null -> "result"
-                else -> "idle"
-            },
+            targetState = when { vm.loading -> "loading"; vm.error != null -> "error"; vm.result != null -> "result"; else -> "idle" },
             transitionSpec = { fadeIn(tween(250)) + slideInVertically(tween(250)) { it / 4 } togetherWith fadeOut(tween(150)) },
-            label = "queryResult",
+            label = "result",
         ) { state ->
             when (state) {
                 "loading" -> CircularProgressIndicator()
-                "error" -> Text("查询失败: ${vm.error}", color = MaterialTheme.colorScheme.error)
+                "error" -> Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.Transparent)) {
+                    Box(Modifier.background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)).padding(16.dp)) {
+                        Text("查询失败: ${vm.error}", color = MaterialTheme.colorScheme.error)
+                    }
+                }
                 "result" -> QueryResultView(vm.result!!)
-                else -> {}
             }
         }
     }
@@ -131,70 +127,66 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
 private fun QueryResultView(result: QueryResult) {
     when (result.status) {
         QueryResultStatus.CONFIRMED -> {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+            Box(
+                Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp))
+                    .background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)).padding(18.dp)
             ) {
-                Column(Modifier.padding(16.dp)) {
+                Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("确定答案", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text("确定答案", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Text(result.answer ?: "", style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.height(10.dp))
+                    Text(result.answer ?: "", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
                 }
             }
         }
         QueryResultStatus.POSSIBLE -> {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+            Box(
+                Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp))
+                    .background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)).padding(18.dp)
             ) {
-                Column(Modifier.padding(16.dp)) {
+                Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Warning, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(20.dp))
+                        Icon(Icons.Default.Warning, null, tint = Color(0xFFF59E0B), modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("可能相关", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                        Text("可能相关", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = Color(0xFFF59E0B))
                     }
                     Spacer(Modifier.height(8.dp))
-                    Text("没有找到确定答案，但找到可能相关证据", style = MaterialTheme.typography.bodyMedium)
+                    Text("没有找到确定答案，但找到可能相关证据", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
                     result.uncertaintyReason?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
             }
         }
-        QueryResultStatus.NOT_FOUND -> {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("没有找到相关信息", style = MaterialTheme.typography.bodyLarge)
-                }
-            }
+        QueryResultStatus.NOT_FOUND -> Box(
+            Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp))
+                .background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)).padding(18.dp)
+        ) {
+            Text("没有找到相关信息", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
         }
     }
 
     if (result.evidences.isNotEmpty()) {
-        Spacer(Modifier.height(12.dp))
-        Text("证据", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-        LazyColumn {
-            items(result.evidences) { ev ->
-                Card(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                ) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
-                        Icon(
-                            evidenceIcon(ev.type), null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp),
-                        )
+        Spacer(Modifier.height(16.dp))
+        Text("证据", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+        Spacer(Modifier.height(8.dp))
+        LazyColumn { items(result.evidences) { ev ->
+            Card(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp).shadow(2.dp, RoundedCornerShape(14.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+            ) {
+                Box(Modifier.background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(14.dp)).padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.Top) {
+                        Icon(evidenceIcon(ev.type), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(10.dp))
                         Column {
-                            Text(ev.content, style = MaterialTheme.typography.bodySmall)
+                            Text(ev.content, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
                             Text("置信: ${ev.confidence.name}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
             }
-        }
+        } }
     }
 }

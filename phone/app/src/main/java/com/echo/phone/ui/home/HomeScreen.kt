@@ -3,6 +3,7 @@ package com.echo.phone.ui.home
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -75,57 +76,80 @@ class HomeViewModel(
     }
 }
 
+// ── Glass card gradient backgrounds ──
+private val GlassBg = Brush.verticalGradient(
+    listOf(
+        Color.White.copy(alpha = 0.10f),
+        Color.White.copy(alpha = 0.06f),
+        Color.White.copy(alpha = 0.03f),
+    )
+)
+
+private val GlassBgElevated = Brush.verticalGradient(
+    listOf(
+        Color.White.copy(alpha = 0.14f),
+        Color.White.copy(alpha = 0.08f),
+        Color.White.copy(alpha = 0.05f),
+    )
+)
+
+private val GlassBorder = Color.White.copy(alpha = 0.10f)
+private val GlassBorderElevated = Color.White.copy(alpha = 0.18f)
+
 // Scene gradient accents
-private fun sceneGradient(scene: TimeScene?): Brush = when (scene) {
-    TimeScene.MEETING -> Brush.verticalGradient(listOf(Color(0xFF4C8DFF), Color(0xFF22D3EE)))
-    TimeScene.ONSITE -> Brush.verticalGradient(listOf(Color(0xFF34D399), Color(0xFF06B6D4)))
-    TimeScene.QUALITY_TIME -> Brush.verticalGradient(listOf(Color(0xFF8B7BFF), Color(0xFFEC4899)))
-    null -> Brush.verticalGradient(listOf(Color(0xFF9FB0CC), Color(0xFFBCC7D0)))
+private fun sceneAccent(scene: TimeScene?): Color = when (scene) {
+    TimeScene.MEETING -> Color(0xFF60A5FA)
+    TimeScene.ONSITE -> Color(0xFF34D399)
+    TimeScene.QUALITY_TIME -> Color(0xFFA78BFA)
+    null -> Color(0xFF64748B)
 }
 
 private val MonoFont = FontFamily.Monospace
 
-// ── Breathing pulse animation for recording indicator ──
+// ── Recording pulse ──
 @Composable
 private fun RecordingPulse(isActive: Boolean) {
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val alpha by infiniteTransition.animateFloat(
-        initialValue = 0.4f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = EaseInOutCubic),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "pulseAlpha",
+    val transition = rememberInfiniteTransition(label = "pulse")
+    val alpha by transition.animateFloat(
+        initialValue = 0.3f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(900, easing = EaseInOutCubic), RepeatMode.Reverse),
+        label = "pulseA",
     )
     Box(
         Modifier
             .size(8.dp)
-            .alpha(if (isActive) alpha else 0.4f)
+            .alpha(if (isActive) alpha else 0.3f)
             .clip(CircleShape)
-            .background(if (isActive) Color(0xFFEF4444) else Color(0xFF9FB0CC))
+            .background(if (isActive) Color(0xFFEF4444) else Color(0xFF475569))
     )
 }
 
 // ── Skeleton shimmer ──
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SkeletonCard() {
     val shimmer = rememberInfiniteTransition(label = "shimmer")
-    val translateAnim by shimmer.animateFloat(
-        initialValue = 0f, targetValue = 1000f,
-        animationSpec = infiniteRepeatable(tween(1200, easing = LinearEasing), RepeatMode.Restart),
+    val tx by shimmer.animateFloat(
+        initialValue = 0f, targetValue = 800f,
+        animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
         label = "shimmerX",
     )
-    val brush = Brush.linearGradient(
-        colors = listOf(
-            MaterialTheme.colorScheme.surfaceContainer,
-            MaterialTheme.colorScheme.surfaceContainerHigh,
-            MaterialTheme.colorScheme.surfaceContainer,
-        ),
-        start = Offset(translateAnim - 200f, 0f),
-        end = Offset(translateAnim, 0f),
-    )
-    Card(Modifier.fillMaxWidth().height(100.dp)) {
-        Box(Modifier.fillMaxSize().background(brush))
+    Card(
+        Modifier.fillMaxWidth().height(100.dp).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+    ) {
+        Box(
+            Modifier.fillMaxSize().background(
+                Brush.linearGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.04f),
+                        Color.White.copy(alpha = 0.10f),
+                        Color.White.copy(alpha = 0.04f),
+                    ),
+                    start = Offset(tx - 200f, 0f), end = Offset(tx, 0f),
+                )
+            )
+        )
     }
 }
 
@@ -146,35 +170,41 @@ fun HomeScreen(
         }
     )
     val deviceStatus by vm.deviceStatus.collectAsState()
-
     LaunchedEffect(Unit) { app.recordingCompleted.collect { vm.refresh() } }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 16.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp).padding(top = 20.dp)) {
         // Header
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text(title, style = MaterialTheme.typography.headlineMedium)
-            IconButton(onClick = { vm.refresh() }) { Icon(Icons.Default.Refresh, "刷新") }
+            Text(title, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface)
+            IconButton(onClick = { vm.refresh() }) { Icon(Icons.Default.Refresh, "刷新", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(16.dp))
 
-        // Device status card with pulse
-        Card(
-            Modifier.fillMaxWidth().shadow(2.dp, RoundedCornerShape(16.dp)),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+        // Device status — glass card
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .shadow(8.dp, RoundedCornerShape(18.dp))
+                .clip(RoundedCornerShape(18.dp))
+                .background(GlassBgElevated)
+                .border(1.dp, GlassBorderElevated, RoundedCornerShape(18.dp))
+                .padding(18.dp)
         ) {
-            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 RecordingPulse(deviceStatus.isRecordingTime || deviceStatus.isRecordingSpace)
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("设备状态", style = MaterialTheme.typography.titleSmall)
+                    Text("设备状态", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(2.dp))
                     Text(
                         if (deviceStatus.connected) "已连接 · 电量 ${deviceStatus.batteryPercent}%"
                         else "未连接",
                         style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
                 if (!deviceStatus.connected) {
-                    TextButton(onClick = { vm.connectGlasses() }) { Text("连接") }
+                    FilledTonalButton(onClick = { vm.connectGlasses() }, modifier = Modifier.height(36.dp)) { Text("连接") }
                 }
             }
             AnimatedVisibility(
@@ -182,35 +212,26 @@ fun HomeScreen(
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut(),
             ) {
-                Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
-                    if (deviceStatus.isRecordingTime) {
-                        Text("● 时间录制中", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                    }
-                    if (deviceStatus.isRecordingSpace) {
-                        Text("◆ 空间采集中", style = MaterialTheme.typography.labelMedium, color = Color(0xFF34D399))
-                    }
+                Column(Modifier.padding(top = 10.dp)) {
+                    if (deviceStatus.isRecordingTime)
+                        Text("● 时间录制中", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    if (deviceStatus.isRecordingSpace)
+                        Text("◆ 空间采集中", style = MaterialTheme.typography.labelSmall, color = Color(0xFF34D399))
                 }
             }
         }
 
-        Spacer(Modifier.height(20.dp))
-        Text("最近记忆", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(24.dp))
+        Text("最近记忆", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
 
         AnimatedContent(
-            targetState = when {
-                vm.loading -> "loading"
-                vm.memories.isEmpty() -> "empty"
-                vm.error != null -> "error"
-                else -> "list"
-            },
-            transitionSpec = { fadeIn(tween(300)) + scaleIn(tween(300)) togetherWith fadeOut(tween(200)) },
-            label = "homeContent",
+            targetState = when { vm.loading -> "loading"; vm.memories.isEmpty() -> "empty"; vm.error != null -> "error"; else -> "list" },
+            transitionSpec = { fadeIn(tween(300)) + scaleIn(tween(300), initialScale = 0.96f) togetherWith fadeOut(tween(150)) },
+            label = "home",
         ) { state ->
             when (state) {
-                "loading" -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    repeat(3) { SkeletonCard() }
-                }
-                "empty" -> Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
+                "loading" -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { repeat(3) { SkeletonCard() } }
+                "empty" -> Box(Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("⏳", style = MaterialTheme.typography.headlineLarge)
                         Spacer(Modifier.height(8.dp))
@@ -222,10 +243,8 @@ fun HomeScreen(
                     Text("加载失败: ${vm.error}", color = MaterialTheme.colorScheme.error)
                     TextButton(onClick = { vm.refresh() }) { Text("重试") }
                 }
-                else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(vm.memories) { memory ->
-                        MemoryCard(memory, onClick = { onNavigateMemory(memory.memoryId) })
-                    }
+                else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    items(vm.memories) { m -> MemoryCard(m, onClick = { onNavigateMemory(m.memoryId) }) }
                 }
             }
         }
@@ -234,62 +253,65 @@ fun HomeScreen(
 
 @Composable
 private fun MemoryCard(memory: MemorySummary, onClick: () -> Unit) {
-    val accent = sceneGradient(memory.scene)
+    val accent = sceneAccent(memory.scene)
     Card(
         Modifier
             .fillMaxWidth()
-            .shadow(1.dp, RoundedCornerShape(16.dp))
+            .shadow(4.dp, RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
     ) {
-        Row {
-            Box(
-                Modifier
-                    .width(4.dp)
-                    .fillMaxHeight()
-                    .defaultMinSize(minHeight = 84.dp)
-                    .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
-                    .background(accent)
-            )
-            Column(Modifier.padding(16.dp).weight(1f)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        memory.title.ifEmpty { memory.identifyBrief }.ifEmpty { "未命名记忆" },
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (memory.isFavorited) {
-                        Icon(Icons.Default.Star, null, tint = Color(0xFFFFB300), modifier = Modifier.size(18.dp))
-                    }
-                }
-                Spacer(Modifier.height(6.dp))
-                // Timestamp in monospace font
-                Text(
-                    buildString {
-                        memory.startedAt?.let {
-                            val date = it.substringBefore("T")
-                            val t = it.substringAfter("T").substringBefore(".").substring(0, 5)
-                            append("$date $t")
-                        }
-                        memory.scene?.let { append("  ${it.name}") }
-                        if (memory.durationSeconds > 0) append("  ${memory.durationSeconds}s")
-                    },
-                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFont),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Box(Modifier.background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp))) {
+            Row {
+                // Left accent strip
+                Box(
+                    Modifier
+                        .width(3.dp)
+                        .fillMaxHeight()
+                        .defaultMinSize(minHeight = 88.dp)
+                        .clip(RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp))
+                        .background(accent.copy(alpha = 0.7f))
                 )
-                if (memory.identifyBrief.isNotEmpty()) {
+                Column(Modifier.padding(18.dp).weight(1f)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            memory.title.ifEmpty { memory.identifyBrief }.ifEmpty { "未命名记忆" },
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (memory.isFavorited)
+                            Icon(Icons.Default.Star, null, tint = Color(0xFFFFB300), modifier = Modifier.size(16.dp))
+                    }
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        memory.identifyBrief,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 2,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        buildString {
+                            memory.startedAt?.let {
+                                val date = it.substringBefore("T")
+                                val t = it.substringAfter("T").substringBefore(".").substring(0, 5)
+                                append("$date $t")
+                            }
+                            memory.scene?.let { append("  ${it.name}") }
+                            if (memory.durationSeconds > 0) append("  ${memory.durationSeconds}s")
+                        },
+                        style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFont),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (memory.identifyBrief.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            memory.identifyBrief,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                        )
+                    }
                 }
             }
         }

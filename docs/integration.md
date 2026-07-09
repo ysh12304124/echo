@@ -34,6 +34,7 @@
 ## 一、后台
 
 ### provider 模式
+
 后台通过 `ECHO_PROVIDER_MODE` 在两种模式切换（见 `backend/.env.example`）：
 
 - `mock`（默认）：离线开发/测试，AI 由确定性 Mock 提供，向量为词法哈希嵌入。
@@ -42,7 +43,7 @@
   - VLM 多模态（视觉摘要 + OCR，同一模型）
   - Whisper `/v1/audio/transcriptions`（verbose_json 分段）
   - Embedding `/v1/embeddings`（bge/m3e）
-  向量落 SQLite（`SqliteVectorStore`），numpy 余弦 + metadata 过滤。
+    向量落 SQLite（`SqliteVectorStore`），numpy 余弦 + metadata 过滤。
 
 ### 启动
 
@@ -145,19 +146,19 @@ adb shell am start -n com.echo.glasses/.MainActivity        # 手动拉起，镜
 
 ## 四、全链路验证
 
-| 检查项 | 验证方式 |
-|--------|----------|
-| 无证据不回答 | 查询不存在的信息 → `status=not_found`，answer 为 null |
-| 有证据返回答案 | 录制会议后查询 → `confirmed` + 转写/视觉证据 + 来源记忆 |
-| 低置信降级 | 仅低置信证据/模型不确定 → `possible` + 提示，不下确定结论 |
+| 检查项            | 验证方式                                                       |
+| ----------------- | -------------------------------------------------------------- |
+| 无证据不回答      | 查询不存在的信息 →`status=not_found`，answer 为 null        |
+| 有证据返回答案    | 录制会议后查询 →`confirmed` + 转写/视觉证据 + 来源记忆      |
+| 低置信降级        | 仅低置信证据/模型不确定 →`possible` + 提示，不下确定结论    |
 | Quality Time 分区 | quality_time 记忆不出现在 work 列表，也不参与 global_work 查询 |
-| 分区强制 | meeting/onsite + quality_time 组合 → 400 |
-| 首页只识别 | 列表卡片仅识别简介，导航型摘要在详情页 |
-| 时空绑定 | 并行时间+空间 → 记忆详情出现候选绑定，可确认/否定 |
-| 证据跳转 | 查询结果来源可跳转到对应记忆 |
-| 人物编辑 | 命名/合并/拆分/删除，禁跨分区合并 |
-| 媒体服务 | `GET /api/v1/media/{key}` 返回文件，缺失 404 |
-| 三 Tab 无陪伴 | 底部仅首页/查询/我的 |
+| 分区强制          | meeting/onsite + quality_time 组合 → 400                      |
+| 首页只识别        | 列表卡片仅识别简介，导航型摘要在详情页                         |
+| 时空绑定          | 并行时间+空间 → 记忆详情出现候选绑定，可确认/否定             |
+| 证据跳转          | 查询结果来源可跳转到对应记忆                                   |
+| 人物编辑          | 命名/合并/拆分/删除，禁跨分区合并                              |
+| 媒体服务          | `GET /api/v1/media/{key}` 返回文件，缺失 404                 |
+| 三 Tab 无陪伴     | 底部仅首页/查询/我的                                           |
 
 ## 产品硬规则对照
 

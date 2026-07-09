@@ -18,7 +18,6 @@ import androidx.navigation.navArgument
 import androidx.compose.ui.platform.LocalContext
 import com.echo.phone.data.PermissionManager
 import com.echo.phone.domain.DataPartition
-import com.echo.phone.ui.capture.CaptureScreen
 import com.echo.phone.ui.home.HomeScreen
 import com.echo.phone.ui.memory.MemoryDetailScreen
 import com.echo.phone.ui.mine.DeviceScreen
@@ -84,7 +83,6 @@ fun EchoApp() {
             }
             composable(Routes.HOME) {
                 HomeScreen(
-                    onNavigateCapture = { navController.navigate(Routes.CAPTURE) },
                     onNavigateMemory = { id -> navController.navigate(Routes.memoryDetail(id)) },
                     onNavigateSpace = { id -> navController.navigate(Routes.spaceDetail(id)) },
                 )
@@ -101,9 +99,6 @@ fun EchoApp() {
                     onNavigateStorage = { navController.navigate(Routes.STORAGE) },
                     onNavigateHelp = { navController.navigate(Routes.HELP) },
                 )
-            }
-            composable(Routes.CAPTURE) {
-                CaptureScreen(onBack = { navController.popBackStack() })
             }
             composable(
                 Routes.MEMORY_DETAIL,
@@ -146,7 +141,6 @@ fun EchoApp() {
                 HomeScreen(
                     partitionFilter = DataPartition.QUALITY_TIME,
                     title = "Quality Time",
-                    onNavigateCapture = { navController.navigate(Routes.CAPTURE) },
                     onNavigateMemory = { id -> navController.navigate(Routes.memoryDetail(id)) },
                     onNavigateSpace = { id -> navController.navigate(Routes.spaceDetail(id)) },
                 )

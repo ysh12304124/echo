@@ -135,23 +135,16 @@ data class DeviceStatus(
 data class MediaFrame(val data: ByteArray, val timestampMs: Long, val isKeyMoment: Boolean = false)
 data class MediaAudio(val data: ByteArray, val timestampMs: Long)
 
+/** 眼镜端下发的记忆控制指令类型。 */
+enum class GlassCommandType { START, STOP }
+
 /**
- * 眼镜物理按键动作（由眼镜端 CXR-S App 经 rk_custom_key 上报）。
- * 手机端据自身录制状态映射为开始/停止/标记等语义。
+ * 眼镜端记忆控制指令（由眼镜 CXR-S App 经 rk_custom_key 上报）。
+ *
+ * 记忆的开始/结束完全由眼镜端主导：用户在眼镜内选择场景后启动 [START]（携带 [scene]），
+ * 再次点击则 [STOP]。手机端仅据此驱动录制与上传，不再提供开始入口。
  */
-enum class GlassKeyAction {
-    /** 触控板单指单击（镜腿按键，系统保留用于进/出 App，应用层不依赖） */
-    CLICK,
-    /** 触控板单指双击（系统保留用于退出 App） */
-    DOUBLE_CLICK,
-    LONG_PRESS,
-    SWIPE_FORWARD,
-    SWIPE_BACK,
-    /** 触控板双指单击 —— 开始/停止录制 */
-    TWO_FINGER_SINGLE_TAP,
-    /** 触控板双指双击 —— 暂停/恢复 */
-    TWO_FINGER_DOUBLE_TAP,
-    /** 触控板双指前滑 —— 标记瞬间 */
-    TWO_FINGER_SWIPE_FORWARD,
-    OTHER,
-}
+data class GlassCommand(
+    val type: GlassCommandType,
+    val scene: TimeScene? = null,
+)

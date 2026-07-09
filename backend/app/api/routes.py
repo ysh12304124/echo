@@ -38,6 +38,7 @@ from app.schemas import (
     UpdateSpaceRequest,
     UploadAckResponse,
 )
+from app.logging_setup import get_logger
 from app.services.ingest_pipeline import IngestPipeline
 from app.services.person_service import PersonService
 from app.services.query_engine import QueryEngine
@@ -47,6 +48,7 @@ class ExportQueryRequest(BaseModel):
     query_id: UUID
 
 router = APIRouter()
+log = get_logger("api")
 
 
 def get_repo(db: AsyncSession = Depends(get_db)) -> MemoryRepository:
@@ -66,7 +68,16 @@ async def create_session(req: CreateSessionRequest, repo: MemoryRepository = Dep
             title=req.title,
         )
     except ValueError as e:
+        log.warning("创建会话失败: %s", e)
         raise HTTPException(400, str(e))
+    log.info(
+        "会话已创建 session=%s type=%s scene=%s partition=%s title=%r",
+        session.id,
+        session.memory_type.value,
+        session.scene.value if session.scene else "-",
+        session.partition.value,
+        req.title,
+    )
     return IngestSessionResponse(
         session_id=session.id,
         memory_type=session.memory_type,
@@ -92,7 +103,17 @@ async def upload_frame(
             session_id, data, timestamp_ms, is_key_moment
         )
     except ValueError as e:
+        log.warning("帧上传失败 session=%s: %s", session_id, e)
         raise HTTPException(404, str(e))
+    log.info(
+        "收到帧 session=%s bytes=%d ts=%d key=%s -> accepted=%s filtered=%s",
+        session_id,
+        len(data),
+        timestamp_ms,
+        is_key_moment,
+        accepted,
+        filtered,
+    )
     return UploadAckResponse(id=frame_id, accepted=accepted, filtered=filtered)
 
 
@@ -108,17 +129,34 @@ async def upload_audio(
     try:
         audio_id = await pipeline.upload_audio(session_id, data, timestamp_ms)
     except ValueError as e:
+        log.warning("语音上传失败 session=%s: %s", session_id, e)
         raise HTTPException(404, str(e))
+    log.info(
+        "收到语音 session=%s bytes=%d ts=%d",
+        session_id,
+        len(data),
+        timestamp_ms,
+    )
     return UploadAckResponse(id=audio_id, accepted=True, filtered=False)
 
 
 @router.post("/ingest/sessions/{session_id}/complete", response_model=MemorySummaryResponse)
 async def complete_session(session_id: UUID, repo: MemoryRepository = Depends(get_repo)):
     pipeline = IngestPipeline(repo)
+    log.info("会话结束，开始处理 session=%s", session_id)
     try:
         memory = await pipeline.complete_session(session_id)
     except ValueError as e:
+        log.warning("会话处理失败 session=%s: %s", session_id, e)
         raise HTTPException(404, str(e))
+    log.info(
+        "记忆已生成 session=%s memory=%s type=%s status=%s brief=%r",
+        session_id,
+        memory.id,
+        "space" if isinstance(memory, SpaceMemory) else "time",
+        memory.status.value,
+        memory.identify_brief,
+    )
 
     if isinstance(memory, SpaceMemory):
         return MemorySummaryResponse(
@@ -397,7 +435,16 @@ async def get_media(key: str):
 @router.post("/query", response_model=QueryResponse)
 async def query(req: QueryRequest, repo: MemoryRepository = Depends(get_repo)):
     engine = QueryEngine(repo)
-    return await engine.query(req.question, req.scope, req.memory_id, req.space_id)
+    log.info("查询请求 scope=%s q=%r", req.scope.value, req.question)
+    result = await engine.query(req.question, req.scope, req.memory_id, req.space_id)
+    log.info(
+        "查询返回 query=%s status=%s evidences=%d answer=%r",
+        result.query_id,
+        result.status.value,
+        len(result.evidences),
+        (result.answer or "")[:80],
+    )
+    return result
 
 
 # --- Persons ---

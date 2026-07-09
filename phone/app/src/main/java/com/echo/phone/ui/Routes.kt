@@ -5,7 +5,6 @@ object Routes {
     const val HOME = "home"
     const val QUERY = "query"
     const val MINE = "mine"
-    const val CAPTURE = "capture"
     const val MEMORY_DETAIL = "memory/{memoryId}"
     const val SPACE_DETAIL = "space/{spaceId}"
     const val PERSONS = "persons"

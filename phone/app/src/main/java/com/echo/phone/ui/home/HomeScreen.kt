@@ -6,7 +6,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FiberManualRecord
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -74,7 +73,6 @@ class HomeViewModel(
 fun HomeScreen(
     partitionFilter: DataPartition? = null,
     title: String = "识境 Echo",
-    onNavigateCapture: () -> Unit,
     onNavigateMemory: (String) -> Unit,
     onNavigateSpace: (String) -> Unit,
 ) {
@@ -115,17 +113,12 @@ fun HomeScreen(
                 if (!deviceStatus.connected) {
                     TextButton(onClick = { vm.connectGlasses() }) { Text("连接眼镜") }
                 }
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        // 快速开始
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onNavigateCapture, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.PlayArrow, null)
-                Spacer(Modifier.width(4.dp))
-                Text("开始记录")
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "记忆的开始/结束由眼镜端控制：在眼镜内选择场景后启动，再次点击退出。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
 

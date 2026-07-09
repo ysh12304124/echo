@@ -1,0 +1,8 @@
+2026-07-08 18:11:34 | INFO  | echo | logging initialized -> /Users/saas/GitHub/echo/backend/log/echo.log
+INFO:     Started server process [45412]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-07-08 18:11:40 | INFO  | echo.request | 收到请求 GET /health (来自 127.0.0.1)
+2026-07-08 18:11:40 | INFO  | echo.request | 返回响应 GET /health -> 200 (1.3ms)
+INFO:     127.0.0.1:52491 - "GET /health HTTP/1.1" 200 OK

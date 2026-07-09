@@ -24,21 +24,21 @@
 
 ### 后台 (`backend/app/`)
 
-| 层 | 目录 | 职责 |
-|----|------|------|
-| API | `api/` | HTTP 路由，请求/响应校验 |
-| Service | `services/` | 业务编排（摄入、查询、人物） |
-| Domain | `domain/` | 领域模型与枚举 |
-| Provider | `providers/` | 可插拔 AI/存储接口 + Mock |
-| Repository | `repositories/` | 持久化与检索 |
+| 层         | 目录              | 职责                         |
+| ---------- | ----------------- | ---------------------------- |
+| API        | `api/`          | HTTP 路由，请求/响应校验     |
+| Service    | `services/`     | 业务编排（摄入、查询、人物） |
+| Domain     | `domain/`       | 领域模型与枚举               |
+| Provider   | `providers/`    | 可插拔 AI/存储接口 + Mock    |
+| Repository | `repositories/` | 持久化与检索                 |
 
 ### 手机端 (`phone/app/src/main/java/com/echo/phone/`)
 
-| 层 | 目录 | 职责 |
-|----|------|------|
-| UI | `ui/` | Compose 界面 + ViewModel |
-| Domain | `domain/` | 业务模型 |
-| Data | `data/` | API 客户端、眼镜连接（`glasses/`：接口+Mock；`glasses/cxr/`：CXR-L 实现）、本地缓存 |
+| 层     | 目录        | 职责                                                                                    |
+| ------ | ----------- | --------------------------------------------------------------------------------------- |
+| UI     | `ui/`     | Compose 界面 + ViewModel                                                                |
+| Domain | `domain/` | 业务模型                                                                                |
+| Data   | `data/`   | API 客户端、眼镜连接（`glasses/`：接口+Mock；`glasses/cxr/`：CXR-L 实现）、本地缓存 |
 
 眼镜连接经 `GlassesConnection` 抽象：`MockGlassesConnection`（离线合成）与 `CxrGlassesConnection`
 （Rokid CXR-L：鉴权/会话/音频/拍照/按键），由 `USE_MOCK_GLASSES` 切换。
@@ -47,10 +47,10 @@
 
 轻量 CXR-S CustomApp，不采集媒体（采集由眼镜固件经 CXR-L 送手机）。
 
-| 目录/文件 | 职责 |
-|----------|------|
-| `MainActivity.kt` | 初始化 `CXRServiceBridge`、订阅手机状态、显示镜片状态、上报按键 |
-| `receiver/KeyReceiver.kt` | 眼镜系统按键广播 → 归一 `KeyType` 上报 |
+| 目录/文件                   | 职责                                                             |
+| --------------------------- | ---------------------------------------------------------------- |
+| `MainActivity.kt`         | 初始化`CXRServiceBridge`、订阅手机状态、显示镜片状态、上报按键 |
+| `receiver/KeyReceiver.kt` | 眼镜系统按键广播 → 归一`KeyType` 上报                         |
 
 ## 核心领域对象
 

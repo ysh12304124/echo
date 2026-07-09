@@ -5,10 +5,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import com.echo.phone.data.glasses.cxr.CxrGlassesConnection
 import com.echo.phone.ui.EchoApp
+import com.echo.phone.ui.theme.EchoTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -19,7 +19,7 @@ class MainActivity : ComponentActivity() {
             if (conn is CxrGlassesConnection) conn.attachActivity(this)
         }
         setContent {
-            MaterialTheme {
+            EchoTheme {
                 Surface {
                     EchoApp()
                 }

@@ -1,9 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 识境 Echo 图标前景：镜片核心 + 向外扩散的「回声」光环，象征记忆的捕捉与回放。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path android:fillColor="#3D5AFE" android:pathData="M54,54m-40,0a40,40 0,1 1,80 0a40,40 0,1 1,-80 0"/>
-    <path android:fillColor="#FFFFFF" android:pathData="M40,42h28v6H40zM40,54h20v6H40z"/>
+    <!-- 外层回声环（品牌蓝，渐弱） -->
+    <path
+        android:strokeColor="#4C8DFF"
+        android:strokeWidth="3"
+        android:strokeAlpha="0.35"
+        android:pathData="M54,54m-30,0a30,30 0,1 1,60 0a30,30 0,1 1,-60 0" />
+    <!-- 中层回声环（青蓝） -->
+    <path
+        android:strokeColor="#22D3EE"
+        android:strokeWidth="3.5"
+        android:strokeAlpha="0.65"
+        android:pathData="M54,54m-21,0a21,21 0,1 1,42 0a21,21 0,1 1,-42 0" />
+    <!-- 镜片核心（青色实心 + 高光点） -->
+    <path
+        android:fillColor="#22D3EE"
+        android:pathData="M54,54m-11,0a11,11 0,1 1,22 0a11,11 0,1 1,-22 0" />
+    <path
+        android:fillColor="#EAFBFF"
+        android:pathData="M50,50m-3.5,0a3.5,3.5 0,1 1,7 0a3.5,3.5 0,1 1,-7 0" />
 </vector>

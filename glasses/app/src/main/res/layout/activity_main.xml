@@ -1,32 +1,80 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#000000"
     android:gravity="center"
     android:orientation="vertical"
-    android:padding="32dp">
+    android:padding="24dp">
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="识境 Echo"
         android:textColor="#FFFFFF"
-        android:textSize="24sp" />
+        android:textSize="22sp" />
+
+    <!-- 场景选择：Onsite / Meeting / Quality Time，高亮项为当前选择。 -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/sceneOnsite"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="12dp"
+            android:padding="8dp"
+            android:text="Onsite"
+            android:textColor="#888888"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/sceneMeeting"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="12dp"
+            android:padding="8dp"
+            android:text="Meeting"
+            android:textColor="#888888"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/sceneQuality"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="8dp"
+            android:text="Quality Time"
+            android:textColor="#888888"
+            android:textSize="18sp" />
+    </LinearLayout>
 
     <TextView
         android:id="@+id/statusText"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="12dp"
         android:textColor="#3D5AFE"
         android:textSize="18sp" />
 
-    <Button
-        android:id="@+id/btnToggle"
+    <TextView
+        android:id="@+id/hintText"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="24dp"
-        android:text="开始/停止" />
+        android:layout_marginTop="8dp"
+        android:gravity="center"
+        android:textColor="#AAAAAA"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/cloudText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textColor="#66BB6A"
+        android:textSize="12sp" />
 
 </LinearLayout>

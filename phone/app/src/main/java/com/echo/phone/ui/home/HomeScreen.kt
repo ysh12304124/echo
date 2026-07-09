@@ -190,33 +190,35 @@ fun HomeScreen(
                 .border(1.dp, GlassBorderElevated, RoundedCornerShape(18.dp))
                 .padding(18.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                RecordingPulse(deviceStatus.isRecordingTime || deviceStatus.isRecordingSpace)
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("设备状态", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        if (deviceStatus.connected) "已连接 · 电量 ${deviceStatus.batteryPercent}%"
-                        else "未连接",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RecordingPulse(deviceStatus.isRecordingTime || deviceStatus.isRecordingSpace)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("设备状态", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            if (deviceStatus.connected) "已连接 · 电量 ${deviceStatus.batteryPercent}%"
+                            else "未连接",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    if (!deviceStatus.connected) {
+                        FilledTonalButton(onClick = { vm.connectGlasses() }, modifier = Modifier.height(36.dp)) { Text("连接") }
+                    }
                 }
-                if (!deviceStatus.connected) {
-                    FilledTonalButton(onClick = { vm.connectGlasses() }, modifier = Modifier.height(36.dp)) { Text("连接") }
-                }
-            }
-            AnimatedVisibility(
-                deviceStatus.isRecordingTime || deviceStatus.isRecordingSpace,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut(),
-            ) {
-                Column(Modifier.padding(top = 10.dp)) {
-                    if (deviceStatus.isRecordingTime)
-                        Text("● 时间录制中", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                    if (deviceStatus.isRecordingSpace)
-                        Text("◆ 空间采集中", style = MaterialTheme.typography.labelSmall, color = Color(0xFF34D399))
+                AnimatedVisibility(
+                    deviceStatus.isRecordingTime || deviceStatus.isRecordingSpace,
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut(),
+                ) {
+                    Column(Modifier.padding(top = 10.dp)) {
+                        if (deviceStatus.isRecordingTime)
+                            Text("● 时间录制中", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        if (deviceStatus.isRecordingSpace)
+                            Text("◆ 空间采集中", style = MaterialTheme.typography.labelSmall, color = Color(0xFF34D399))
+                    }
                 }
             }
         }

@@ -56,10 +56,10 @@ class MainActivity : AppCompatActivity() {
 
     private val statusListener = object : CXRServiceBridge.StatusListener {
         override fun onConnected(p0: String?, p1: String?, p2: Int) {
-            Log.d(TAG, "onConnected"); runOnUiThread { cloudText.text = "手机已连接" }
+            Log.i(TAG, "bridge onConnected p0=$p0 p1=$p1 p2=$p2"); runOnUiThread { cloudText.text = "手机已连接" }
         }
         override fun onDisconnected() {
-            Log.d(TAG, "onDisconnected"); runOnUiThread { cloudText.text = "手机已断开" }
+            Log.i(TAG, "bridge onDisconnected"); runOnUiThread { cloudText.text = "手机已断开" }
         }
         override fun onConnecting(p0: String?, p1: String?, p2: Int) {}
         override fun onARTCStatus(p0: Float, p1: Boolean) {}
@@ -91,7 +91,13 @@ class MainActivity : AppCompatActivity() {
         sceneViews.forEachIndexed { i, tv -> tv.setOnClickListener { onSceneTap(i) } }
 
         bridge.setStatusListener(statusListener)
-        bridge.subscribe(CLIENT_KEY, msgCallback)
+        val subRet = bridge.subscribe(CLIENT_KEY, msgCallback)
+        Log.i(
+            TAG,
+            "bridge 初始化 subscribe($CLIENT_KEY)=$subRet " +
+                "错误码定义 EINVAL=${CXRServiceBridge.EINVAL} EDUP=${CXRServiceBridge.EDUP} " +
+                "EFAULT=${CXRServiceBridge.EFAULT} EBUSY=${CXRServiceBridge.EBUSY}",
+        )
 
         registerReceiver(keyReceiver, IntentFilter().apply {
             addAction(KeyType.CLICK.action)
@@ -152,19 +158,19 @@ class MainActivity : AppCompatActivity() {
     private fun startMemory() {
         recording = true
         val scene = scenes[selected]
-        bridge.sendMessage(CMD_KEY, Caps().apply {
+        val ret = bridge.sendMessage(CMD_KEY, Caps().apply {
             write("cmd"); write("START"); write(scene.cmd)
         })
-        Log.i(TAG, "START ${scene.cmd}")
+        Log.i(TAG, "发送 START ${scene.cmd} -> sendMessage($CMD_KEY) 返回=$ret (0=成功,负值=失败)")
         render()
     }
 
     private fun stopMemory() {
         recording = false
-        bridge.sendMessage(CMD_KEY, Caps().apply {
+        val ret = bridge.sendMessage(CMD_KEY, Caps().apply {
             write("cmd"); write("STOP")
         })
-        Log.i(TAG, "STOP")
+        Log.i(TAG, "发送 STOP -> sendMessage($CMD_KEY) 返回=$ret (0=成功,负值=失败)")
         render()
     }
 

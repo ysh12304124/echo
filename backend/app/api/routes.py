@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Optional
 from uuid import UUID
 
@@ -205,7 +206,13 @@ async def list_memories(
         )
         for m in memories
     ]
-    return MemoryListResponse(items=items, total=total)
+    resp = MemoryListResponse(items=items, total=total)
+    log.info(
+        "查询记忆列表 partition=%s scene=%s status=%s limit=%d offset=%d -> total=%d 返回=%d 结果=%s",
+        partition, scene, status, limit, offset, total, len(items),
+        json.dumps(resp.model_dump(mode="json"), ensure_ascii=False),
+    )
+    return resp
 
 
 @router.get("/memories/{memory_id}", response_model=TimeMemoryDetailResponse)

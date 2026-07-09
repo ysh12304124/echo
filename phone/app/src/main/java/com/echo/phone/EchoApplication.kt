@@ -15,6 +15,9 @@ import com.echo.phone.util.EchoLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -29,6 +32,9 @@ class EchoApplication : Application() {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val isRecording = AtomicBoolean(false)
 
+    private val _recordingCompleted = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
+    val recordingCompleted: SharedFlow<Unit> = _recordingCompleted.asSharedFlow()
+
     override fun onCreate() {
         super.onCreate()
         repository = EchoRepository(ApiClient.service)
@@ -42,10 +48,6 @@ class EchoApplication : Application() {
         startGlassCommandListener()
     }
 
-    /**
-     * 记忆的开始/结束完全由眼镜端主导：眼镜内选择场景后启动 START（携带场景），
-     * 再次点击 STOP。手机端不再提供开始入口，仅据此驱动录制与上传。
-     */
     private fun startGlassCommandListener() {
         EchoLog.i("已开始监听眼镜指令流(等待眼镜端 START/STOP)")
         appScope.launch {
@@ -85,6 +87,7 @@ class EchoApplication : Application() {
         try {
             val summary = recordingController.stopAndComplete()
             EchoLog.i("记忆结束并上传完成 memoryId=${summary.memoryId} status=${summary.status}")
+            _recordingCompleted.emit(Unit)
         } catch (e: Exception) {
             EchoLog.e("结束/上传失败: ${e.message}", e)
         }

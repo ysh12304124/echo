@@ -6,8 +6,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +36,8 @@ class HomeViewModel(
         private set
     var error by mutableStateOf<String?>(null)
         private set
+    var isRefreshing by mutableStateOf(false)
+        private set
 
     val deviceStatus = glasses.deviceStatus.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5000),
@@ -42,11 +46,14 @@ class HomeViewModel(
 
     init {
         refresh()
+        observeRecordingCompleted()
     }
+
 
     fun refresh() {
         viewModelScope.launch {
             loading = true
+            isRefreshing = true
             try {
                 memories = repo.listMemories(partitionFilter).sortedByDescending { it.startedAt }
                 error = null
@@ -54,6 +61,7 @@ class HomeViewModel(
                 error = e.message
             }
             loading = false
+            isRefreshing = false
         }
     }
 
@@ -87,8 +95,18 @@ fun HomeScreen(
     )
     val deviceStatus by vm.deviceStatus.collectAsState()
 
+    // 录制完成后自动刷新
+    LaunchedEffect(Unit) {
+        app.recordingCompleted.collect { vm.refresh() }
+    }
+
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text(title, style = MaterialTheme.typography.headlineMedium)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(title, style = MaterialTheme.typography.headlineMedium)
+            IconButton(onClick = { vm.refresh() }) {
+                Icon(Icons.Default.Refresh, "刷新")
+            }
+        }
         Spacer(Modifier.height(12.dp))
 
         // 设备状态
@@ -126,12 +144,17 @@ fun HomeScreen(
         Text("最近记忆", style = MaterialTheme.typography.titleMedium)
 
         when {
-            vm.loading -> CircularProgressIndicator()
+            vm.loading && !vm.isRefreshing -> CircularProgressIndicator()
             vm.error != null -> Text("加载失败: ${vm.error}", color = MaterialTheme.colorScheme.error)
             vm.memories.isEmpty() -> Text("暂无记忆", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(vm.memories) { memory ->
-                    MemoryCard(memory, onClick = { onNavigateMemory(memory.memoryId) })
+            else -> PullToRefreshBox(
+                isRefreshing = vm.isRefreshing,
+                onRefresh = { vm.refresh() },
+            ) {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(vm.memories) { memory ->
+                        MemoryCard(memory, onClick = { onNavigateMemory(memory.memoryId) })
+                    }
                 }
             }
         }
@@ -153,7 +176,6 @@ private fun MemoryCard(memory: MemorySummary, onClick: () -> Unit) {
             Text(
                 buildString {
                     memory.startedAt?.let {
-                        // display as HH:mm  e.g. "14:30"
                         val date = it.substringBefore("T").substring(5); val t = it.substringAfter("T").substringBefore(".")
                         append(date + " "); if (t.length >= 5) append(t.substring(0, 5))
                     }

@@ -131,7 +131,10 @@ class IngestPipeline:
 
         # 1) 所有语音块合并为一整段，只发一次 Whisper ASR 得到全量转写。
         transcript_text = await self._transcribe_all_audio(asr, audio_paths)
-        log.info("语音转写完成 memory=%s 文本长度=%d", memory.id, len(transcript_text))
+        log.info(
+            "语音转写完成 memory=%s 文本长度=%d 文本=%r",
+            memory.id, len(transcript_text), transcript_text,
+        )
 
         # 2) 全量转写 + 收到的第一张图片 → gemma 得到 人物数量/空间/语音总结。
         first_image = frame_paths[0] if frame_paths else None

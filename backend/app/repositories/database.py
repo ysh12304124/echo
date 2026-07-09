@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -23,7 +23,7 @@ class SessionORM(Base):
     status: Mapped[str] = mapped_column(String(20))
     memory_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     title: Mapped[str] = mapped_column(String(200), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     frame_count: Mapped[int] = mapped_column(Integer, default=0)
     audio_chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     frame_paths: Mapped[str] = mapped_column(Text, default="[]")

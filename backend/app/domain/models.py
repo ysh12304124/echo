@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
@@ -133,6 +133,6 @@ class IngestSession(BaseModel):
     status: MemoryStatus = MemoryStatus.RECORDING
     memory_id: Optional[UUID] = None
     title: str = ""
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     frame_count: int = 0
     audio_chunk_count: int = 0

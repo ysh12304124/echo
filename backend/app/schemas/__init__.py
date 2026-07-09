@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -16,6 +16,17 @@ from app.domain.enums import (
     TimeScene,
 )
 from app.domain.models import NavigationSummary
+
+
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def format_beijing_time(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
 # --- Ingest ---
@@ -57,8 +68,8 @@ class MemorySummaryResponse(BaseModel):
 
     @field_serializer("started_at")
     def _format_started_at(self, value: Optional[datetime]) -> Optional[str]:
-        # 输出为 "YYYY-MM-DD HH:MM:SS"（与后端日志时间格式一致）。
-        return value.strftime("%Y-%m-%d %H:%M:%S") if value else None
+        # DB stores UTC; API displays Beijing time to match backend logs.
+        return format_beijing_time(value)
 
 
 class MemoryListResponse(BaseModel):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import wave
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -33,6 +33,12 @@ log = get_logger("ingest")
 _AUDIO_SAMPLE_RATE = 16000
 _AUDIO_CHANNELS = 1
 _AUDIO_SAMPLE_WIDTH = 2
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 class IngestPipeline:
@@ -113,7 +119,7 @@ class IngestPipeline:
             partition=session.partition,
             status=MemoryStatus.PROCESSING,
             started_at=session.created_at,
-            ended_at=datetime.utcnow(),
+            ended_at=datetime.now(timezone.utc),
             session_id=session.id,
             title=session.title,
         )
@@ -171,7 +177,7 @@ class IngestPipeline:
             topics=[space] if space else [],
         )
 
-        duration = int((datetime.utcnow() - session.created_at).total_seconds())
+        duration = int((datetime.now(timezone.utc) - _as_utc(session.created_at)).total_seconds())
         memory = await self.repo.update_time_memory(
             memory.id,
             status=MemoryStatus.COMPLETED,
@@ -180,7 +186,7 @@ class IngestPipeline:
             evidence_status="ready",
             duration_seconds=duration,
             title=memory.title or identify_brief,
-            ended_at=datetime.utcnow(),
+            ended_at=datetime.now(timezone.utc),
         )
         await self.repo.link_session_memory(session.id, memory.id, MemoryStatus.COMPLETED)
         log.info("时间记忆已保存 memory=%s duration=%ds", memory.id, duration)
@@ -240,7 +246,7 @@ class IngestPipeline:
             quality=quality,
             model_url=result.model_url,
             anchors=anchors,
-            captured_at=datetime.utcnow(),
+            captured_at=datetime.now(timezone.utc),
             identify_brief=session.title or "空间采集",
             session_id=session.id,
             title=session.title or "空间记忆",

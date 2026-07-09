@@ -154,8 +154,8 @@ private fun MemoryCard(memory: MemorySummary, onClick: () -> Unit) {
             Text(
                 buildString {
                     memory.startedAt?.let {
-                        val date = it.substringBefore("T").substring(5); val t = it.substringAfter("T").substringBefore(".")
-                        append(date + " "); if (t.length >= 5) append(t.substring(0, 5))
+                        val date = it.substringBefore("T"); val t = it.substringAfter("T").substringBefore(".")
+                        append(date + " "); if (t.length >= 8) append(t.substring(0, 5))
                     }
                     memory.scene?.let { append(" " + it.name) }
                     append(" · ")

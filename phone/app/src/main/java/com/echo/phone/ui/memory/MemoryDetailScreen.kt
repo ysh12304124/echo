@@ -10,10 +10,13 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -43,12 +46,9 @@ class MemoryDetailViewModel(
             loading = true
             try {
                 val m = repo.getMemory(memoryId)
-                memory = m
-                isFavorited = m.isFavorited
+                memory = m; isFavorited = m.isFavorited; isLocked = m.isLocked
                 bindings = repo.listMemoryBindings(memoryId)
-            } catch (e: Exception) {
-                error = e.message
-            }
+            } catch (e: Exception) { error = e.message }
             loading = false
         }
     }
@@ -69,30 +69,22 @@ class MemoryDetailViewModel(
 
     fun delete(onDone: () -> Unit) {
         viewModelScope.launch {
-            try {
-                repo.deleteMemory(memoryId)
-                onDone()
-            } catch (e: Exception) {
-                error = "删除失败: ${e.message}"
-            }
+            try { repo.deleteMemory(memoryId); onDone() }
+            catch (e: Exception) { error = "删除失败: ${e.message}" }
         }
     }
 
     fun confirmBinding(id: String) {
         viewModelScope.launch {
-            try {
-                repo.confirmBinding(id)
-                bindings = repo.listMemoryBindings(memoryId)
-            } catch (e: Exception) { error = e.message }
+            try { repo.confirmBinding(id); bindings = repo.listMemoryBindings(memoryId) }
+            catch (e: Exception) { error = e.message }
         }
     }
 
     fun rejectBinding(id: String) {
         viewModelScope.launch {
-            try {
-                repo.rejectBinding(id)
-                bindings = repo.listMemoryBindings(memoryId)
-            } catch (e: Exception) { error = e.message }
+            try { repo.rejectBinding(id); bindings = repo.listMemoryBindings(memoryId) }
+            catch (e: Exception) { error = e.message }
         }
     }
 
@@ -101,9 +93,8 @@ class MemoryDetailViewModel(
         if (preset != null) queryQuestion = preset
         if (q.isBlank()) return
         viewModelScope.launch {
-            try {
-                queryResult = repo.query(q, QueryScope.MEMORY, memoryId)
-            } catch (e: Exception) { error = e.message }
+            try { queryResult = repo.query(q, QueryScope.MEMORY, memoryId) }
+            catch (e: Exception) { error = e.message }
         }
     }
 }
@@ -127,16 +118,11 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
             TopAppBar(
                 title = { Text(vm.memory?.title ?: "记忆详情") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
-                    }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
                 },
                 actions = {
                     IconButton(onClick = { vm.toggleFavorite() }) {
-                        Icon(
-                            if (vm.isFavorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                            "收藏",
-                        )
+                        Icon(if (vm.isFavorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "收藏")
                     }
                     IconButton(onClick = { vm.toggleLock() }) {
                         Icon(if (vm.isLocked) Icons.Default.Lock else Icons.Default.LockOpen, "锁定")
@@ -149,33 +135,89 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
         },
     ) { padding ->
         if (vm.loading) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = androidx.compose.ui.Alignment.Center) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
             return@Scaffold
         }
 
         val memory = vm.memory ?: return@Scaffold
+        val nav = memory.navigationSummary
 
         LazyColumn(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+            // 基本信息
             item {
-                Text("${memory.scene.name} · ${memory.partition.name}", style = MaterialTheme.typography.labelMedium)
-                Text(memory.identifyBrief, style = MaterialTheme.typography.bodyLarge)
-                Spacer(Modifier.height(16.dp))
+                Text("${memory.scene.name} · ${memory.partition.name} · ${memory.durationSeconds}s",
+                    style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.height(8.dp))
             }
 
-            // 候选时空绑定：让用户确认/否定
-            if (vm.bindings.isNotEmpty()) {
-                item {
-                    Text("关联空间", style = MaterialTheme.typography.titleMedium)
+            // 总结
+            item {
+                DetailSection("总结") {
+                    Text(memory.identifyBrief, style = MaterialTheme.typography.bodyLarge)
                 }
+            }
+
+            // 人物
+            if (nav?.persons?.isNotEmpty() == true) {
+                item {
+                    DetailSection("人物") {
+                        Text(nav.persons.joinToString("、"), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+
+            // 话题
+            if (nav?.topics?.isNotEmpty() == true) {
+                item {
+                    DetailSection("话题") {
+                        Text(nav.topics.joinToString("、"), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+
+            // 关键瞬间
+            if (nav?.keyMoments?.isNotEmpty() == true) {
+                item {
+                    DetailSection("关键瞬间") {
+                        nav.keyMoments.forEach { km ->
+                            Text("· ${km.label}（${km.timeOffsetSeconds}s）", style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+
+            // 时间
+            item {
+                DetailSection("时间") {
+                    val timeText = memory.startedAt?.let {
+                        val date = it.substringBefore("T")
+                        val t = it.substringAfter("T").substringBefore(".").substring(0, 5)
+                        "$date $t"
+                    } ?: "未知"
+                    Text(timeText, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+
+            // 可问问题
+            nav?.suggestedQuestions?.let { questions ->
+                if (questions.isNotEmpty()) {
+                    item {
+                        DetailSection("可问问题") {
+                            Column { questions.forEach { q -> SuggestionChip(onClick = { vm.queryInMemory(q) }, label = { Text(q) }) } }
+                        }
+                    }
+                }
+            }
+
+            // 时空绑定
+            if (vm.bindings.isNotEmpty()) {
+                item { DetailSection("关联空间") {} }
                 items(vm.bindings) { b ->
                     Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                         Column(Modifier.padding(12.dp)) {
-                            Text(
-                                if (b.userConfirmed) "已确认关联空间" else "候选关联空间（并行采集）",
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
+                            Text(if (b.userConfirmed) "已确认" else "候选（并行采集）", style = MaterialTheme.typography.bodySmall)
                             b.spaceMemoryId?.let { sid ->
                                 TextButton(onClick = { onNavigateSpace(sid) }) { Text("查看空间") }
                             }
@@ -188,58 +230,53 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
                         }
                     }
                 }
-                item { Spacer(Modifier.height(16.dp)) }
             }
 
+            // 在当前记忆中查询
             item {
-                Text("导航型摘要", style = MaterialTheme.typography.titleMedium)
-                memory.navigationSummary?.let { nav ->
-                    if (nav.persons.isNotEmpty()) Text("人物: ${nav.persons.joinToString()}")
-                    if (nav.topics.isNotEmpty()) Text("话题: ${nav.topics.joinToString()}")
-                    nav.keyMoments.forEach { km ->
-                        Text("· ${km.label} (${km.timeOffsetSeconds}s)")
-                    }
-                }
                 Spacer(Modifier.height(16.dp))
-            }
-
-            item {
-                Text("在此记忆中查询", style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(
                     value = vm.queryQuestion,
                     onValueChange = { vm.queryQuestion = it },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("这段记忆里答应了什么？") },
+                    placeholder = { Text("在此记忆中查询…") },
+                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                    singleLine = true,
                 )
-                Button(onClick = { vm.queryInMemory() }, modifier = Modifier.padding(top = 8.dp)) {
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = { vm.queryInMemory() }, modifier = Modifier.fillMaxWidth()) {
                     Text("查询")
                 }
-                vm.queryResult?.let { result ->
+            }
+
+            // 查询结果
+            vm.queryResult?.let { result ->
+                item {
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        when (result.status) {
-                            QueryResultStatus.CONFIRMED -> result.answer ?: ""
-                            QueryResultStatus.POSSIBLE ->
-                                "可能相关：${result.uncertaintyReason ?: "证据置信度不足"}"
-                            QueryResultStatus.NOT_FOUND -> "没有找到相关信息"
-                        },
-                    )
-                    result.evidences.forEach { ev ->
-                        Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text("[${ev.type.name}] ${ev.content}")
-                                Text("置信: ${ev.confidence.name}", style = MaterialTheme.typography.labelSmall)
-                            }
+                    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(
+                        containerColor = when (result.status) {
+                            QueryResultStatus.CONFIRMED -> MaterialTheme.colorScheme.primaryContainer
+                            QueryResultStatus.POSSIBLE -> MaterialTheme.colorScheme.secondaryContainer
+                            QueryResultStatus.NOT_FOUND -> MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    )) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text(
+                                when (result.status) {
+                                    QueryResultStatus.CONFIRMED -> result.answer ?: ""
+                                    QueryResultStatus.POSSIBLE -> "可能相关：${result.uncertaintyReason ?: "证据置信度不足"}"
+                                    QueryResultStatus.NOT_FOUND -> "没有找到相关信息"
+                                },
+                            )
                         }
                     }
                 }
-                Spacer(Modifier.height(16.dp))
-            }
-
-            memory.navigationSummary?.suggestedQuestions?.let { questions ->
-                item { Text("可问问题", style = MaterialTheme.typography.titleSmall) }
-                items(questions) { q ->
-                    SuggestionChip(onClick = { vm.queryInMemory(q) }, label = { Text(q) })
+                items(result.evidences) { ev ->
+                    Card(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text("[${ev.type.name}] ${ev.content}", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 }
             }
 
@@ -253,17 +290,20 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
             title = { Text("删除记忆") },
             text = { Text(if (vm.isLocked) "记忆已锁定，请先解锁再删除。" else "删除后无法恢复，确定删除？") },
             confirmButton = {
-                TextButton(
-                    enabled = !vm.isLocked,
-                    onClick = {
-                        showDeleteDialog = false
-                        vm.delete(onBack)
-                    },
-                ) { Text("删除") }
+                TextButton(enabled = !vm.isLocked, onClick = { showDeleteDialog = false; vm.delete(onBack) }) { Text("删除") }
             },
-            dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) { Text("取消") }
-            },
+            dismissButton = { TextButton(onClick = { showDeleteDialog = false }) { Text("取消") } },
         )
+    }
+}
+
+@Composable
+private fun DetailSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Column(Modifier.padding(16.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            content()
+        }
     }
 }

@@ -47,6 +47,7 @@ data class TimeMemoryDetail(
     val evidenceStatus: String,
     val isFavorited: Boolean,
     val durationSeconds: Int,
+    val startedAt: String? = null,
 )
 
 data class SpaceMemoryDetail(

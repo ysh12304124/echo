@@ -46,6 +46,11 @@ class IngestSessionResponse(BaseModel):
     status: MemoryStatus
     created_at: datetime
 
+    @field_serializer("created_at")
+    def _format_created_at(self, value: datetime) -> Optional[str]:
+        # DB stores UTC; API displays Beijing time to match backend logs.
+        return format_beijing_time(value)
+
 
 class UploadAckResponse(BaseModel):
     id: UUID
@@ -99,6 +104,11 @@ class TimeMemoryDetailResponse(BaseModel):
     is_favorited: bool = False
     is_locked: bool = False
 
+    @field_serializer("started_at", "ended_at")
+    def _format_time_fields(self, value: Optional[datetime]) -> Optional[str]:
+        # DB stores UTC; API displays Beijing time to match backend logs.
+        return format_beijing_time(value)
+
 
 class SpaceAnchorResponse(BaseModel):
     anchor_id: UUID
@@ -118,6 +128,11 @@ class SpaceMemoryDetailResponse(BaseModel):
     captured_at: Optional[datetime] = None
     is_favorited: bool = False
     identify_brief: str = ""
+
+    @field_serializer("captured_at")
+    def _format_captured_at(self, value: Optional[datetime]) -> Optional[str]:
+        # DB stores UTC; API displays Beijing time to match backend logs.
+        return format_beijing_time(value)
 
 
 class SpaceListResponse(BaseModel):

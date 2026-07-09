@@ -46,6 +46,7 @@ data class TimeMemoryDetail(
     val navigationSummary: NavigationSummary?,
     val evidenceStatus: String,
     val isFavorited: Boolean,
+    val isLocked: Boolean = false,
     val durationSeconds: Int,
     val startedAt: String? = null,
 )
@@ -59,6 +60,7 @@ data class SpaceMemoryDetail(
     val modelUrl: String?,
     val identifyBrief: String,
     val isFavorited: Boolean,
+    val isLocked: Boolean = false,
     val anchors: List<SpaceAnchor> = emptyList(),
 )
 

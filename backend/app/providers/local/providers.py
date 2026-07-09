@@ -198,6 +198,44 @@ class LocalVLMProvider(VisionProvider, OCRProvider):
         result = await self.analyze_frame(image_path)
         return result.is_informative
 
+    async def summarize_session(self, transcript: str, image_path: str | None) -> dict:
+        """全量转写 + 首帧图片 → 人物数量 / 所在空间 / 语音内容总结。"""
+        system = (
+            "你是识境 Echo 的记忆助手。根据给定的一段第一视角图片与语音转写，"
+            "总结这段记忆。只依据给定内容，不臆测。"
+            "输出 JSON: {\"person_count\": 画面中的人物数量(整数), "
+            "\"space\": \"所在空间的简短描述\", "
+            "\"voice_summary\": \"语音内容的总结\"}。"
+        )
+        user_content: list[dict] = [
+            {"type": "text", "text": f"语音转写:\n{transcript or '(无语音)'}"},
+        ]
+        if image_path:
+            user_content.append(
+                {"type": "image_url", "image_url": {"url": encode_image_data_url(image_path)}}
+            )
+        content = await self.client.chat(
+            self.model,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        parsed = parse_json_loose(content)
+        if not isinstance(parsed, dict):
+            return {"person_count": 0, "space": "", "voice_summary": content.strip()}
+        try:
+            person_count = int(parsed.get("person_count", 0) or 0)
+        except (TypeError, ValueError):
+            person_count = 0
+        return {
+            "person_count": person_count,
+            "space": (parsed.get("space") or "").strip(),
+            "voice_summary": (parsed.get("voice_summary") or "").strip(),
+        }
+
     async def extract_text(self, image_path: str) -> OCRResult:
         data_url = encode_image_data_url(image_path)
         system = (

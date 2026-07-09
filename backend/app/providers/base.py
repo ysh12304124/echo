@@ -58,6 +58,15 @@ class VisionProvider(ABC):
         """初筛：模糊/重复/无信息帧丢弃"""
         pass
 
+    async def summarize_session(
+        self, transcript: str, image_path: Optional[str]
+    ) -> dict:
+        """依据全量语音转写 + 首帧图片，产出一段记忆的结构化摘要。
+
+        返回 {"person_count": int, "space": str, "voice_summary": str}。默认空。
+        """
+        return {}
+
 
 class OCRProvider(ABC):
     @abstractmethod

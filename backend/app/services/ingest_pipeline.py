@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import tempfile
+import wave
 from datetime import datetime
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from app.domain.enums import (
-    BindingType,
     ConfidenceLevel,
     DataPartition,
-    EventType,
     EvidenceType,
     MemoryStatus,
     MemoryType,
@@ -15,34 +16,29 @@ from app.domain.enums import (
     TimeScene,
 )
 from app.domain.models import (
-    Binding,
-    Entity,
-    Event,
     Evidence,
     IngestSession,
+    NavigationSummary,
     SpaceAnchor,
     SpaceMemory,
     TimeMemory,
 )
+from app.logging_setup import get_logger
 from app.providers import ProviderFactory, get_provider_factory
 from app.repositories.memory_repo import MemoryRepository
-from app.services.memory_builder import MemoryBuilder
-from app.services.person_service import PersonService
 
+log = get_logger("ingest")
 
-def _confidence(value: str, default: ConfidenceLevel = ConfidenceLevel.MEDIUM) -> ConfidenceLevel:
-    try:
-        return ConfidenceLevel(value)
-    except (ValueError, TypeError):
-        return default
+# 眼镜端音频约定：PCM 16kHz / 单声道 / 16bit（手机端按 1 秒 32000 字节分块上传）。
+_AUDIO_SAMPLE_RATE = 16000
+_AUDIO_CHANNELS = 1
+_AUDIO_SAMPLE_WIDTH = 2
 
 
 class IngestPipeline:
     def __init__(self, repo: MemoryRepository, providers: ProviderFactory | None = None):
         self.repo = repo
         self.providers = providers or get_provider_factory()
-        self.memory_builder = MemoryBuilder(self.providers)
-        self.person_service = PersonService(repo)
 
     async def create_session(
         self,
@@ -79,14 +75,10 @@ class IngestPipeline:
             raise ValueError("Session not found")
 
         blob = self.providers.blob_store()
-        vision = self.providers.vision()
         key = f"sessions/{session_id}/frames/{uuid4()}.jpg"
         path = await blob.save(key, data, "image/jpeg")
 
-        keep = await vision.should_keep_frame(path)
-        if not keep:
-            return uuid4(), False, True
-
+        # 按接收顺序保存全部帧，确保 complete 时能取到「收到的第一张图片」。
         await self.repo.update_session_frames(session_id, path)
         return UUID(key.split("/")[-1].replace(".jpg", "")), True, False
 
@@ -127,144 +119,54 @@ class IngestPipeline:
         )
         await self.repo.create_time_memory(memory)
         await self.repo.link_session_memory(session.id, memory.id, MemoryStatus.PROCESSING)
+        log.info(
+            "开始处理时间记忆 memory=%s frames=%d audio_chunks=%d",
+            memory.id, len(frame_paths), len(audio_paths),
+        )
 
         asr = self.providers.asr()
         vision = self.providers.vision()
-        ocr = self.providers.ocr()
-        llm = self.providers.llm()
         embedding = self.providers.embedding()
         vector_store = self.providers.vector_store()
-        blob = self.providers.blob_store()
 
-        all_transcript = []
-        for audio_path in audio_paths:
-            segments = await asr.transcribe(audio_path)
-            for seg in segments:
-                if seg.confidence >= 0.85:
-                    seg_conf = ConfidenceLevel.HIGH
-                elif seg.confidence >= 0.6:
-                    seg_conf = ConfidenceLevel.MEDIUM
-                else:
-                    seg_conf = ConfidenceLevel.LOW
-                ev = Evidence(
-                    memory_id=memory.id,
-                    type=EvidenceType.TRANSCRIPT,
-                    content=seg.text,
-                    timestamp_ms=seg.start_ms,
-                    confidence=seg_conf,
-                    metadata={"speaker_id": seg.speaker_id or "unknown"},
-                )
-                await self.repo.save_evidence(ev)
-                all_transcript.append(seg.text)
-                emb = await embedding.embed(seg.text)
-                await vector_store.upsert(
-                    str(ev.id),
-                    emb.vector,
-                    {"memory_id": str(memory.id), "partition": memory.partition.value, "type": "transcript"},
-                )
+        # 1) 所有语音块合并为一整段，只发一次 Whisper ASR 得到全量转写。
+        transcript_text = await self._transcribe_all_audio(asr, audio_paths)
+        log.info("语音转写完成 memory=%s 文本长度=%d", memory.id, len(transcript_text))
 
-        for i, frame_path in enumerate(frame_paths):
-            vis = await vision.analyze_frame(frame_path)
-            if not vis.is_informative:
-                continue
+        # 2) 全量转写 + 收到的第一张图片 → gemma 得到 人物数量/空间/语音总结。
+        first_image = frame_paths[0] if frame_paths else None
+        summary = await vision.summarize_session(transcript_text, first_image)
+        person_count = int(summary.get("person_count", 0) or 0)
+        space = (summary.get("space") or "").strip()
+        voice_summary = (summary.get("voice_summary") or "").strip()
+        log.info(
+            "记忆摘要生成 memory=%s person_count=%d space=%r voice_summary_len=%d",
+            memory.id, person_count, space, len(voice_summary),
+        )
+
+        # 3) 保存全量转写为证据并建立向量索引，供客户端 /query 检索。
+        if transcript_text:
             ev = Evidence(
                 memory_id=memory.id,
-                type=EvidenceType.VISUAL,
-                content=vis.summary,
-                media_path=frame_path,
-                timestamp_ms=i * 2000,
+                type=EvidenceType.TRANSCRIPT,
+                content=transcript_text,
+                timestamp_ms=0,
                 confidence=ConfidenceLevel.HIGH,
             )
             await self.repo.save_evidence(ev)
-            emb = await embedding.embed(vis.summary)
+            emb = await embedding.embed(transcript_text)
             await vector_store.upsert(
                 str(ev.id),
                 emb.vector,
-                {"memory_id": str(memory.id), "partition": memory.partition.value, "type": "visual"},
+                {"memory_id": str(memory.id), "partition": memory.partition.value, "type": "transcript"},
             )
 
-            ocr_result = await ocr.extract_text(frame_path)
-            if ocr_result.text:
-                ocr_ev = Evidence(
-                    memory_id=memory.id,
-                    type=EvidenceType.OCR,
-                    content=ocr_result.text,
-                    media_path=frame_path,
-                    timestamp_ms=i * 2000,
-                    confidence=ConfidenceLevel.HIGH if ocr_result.confidence >= 0.8 else ConfidenceLevel.MEDIUM,
-                )
-                await self.repo.save_evidence(ocr_ev)
-                emb = await embedding.embed(ocr_result.text)
-                await vector_store.upsert(
-                    str(ocr_ev.id),
-                    emb.vector,
-                    {"memory_id": str(memory.id), "partition": memory.partition.value, "type": "ocr"},
-                )
-
-        transcript_text = " ".join(all_transcript)
-        # 视觉/OCR 摘要也纳入抽取上下文，提升实体/事件召回。
-        visual_context = " ".join(
-            e.content for e in await self.repo.list_evidences(memory.id)
-            if e.type in (EvidenceType.VISUAL, EvidenceType.OCR)
+        # 组织可读摘要：时间由 started_at/duration 体现，人物数量/空间/语音总结落到展示字段。
+        identify_brief = f"共{person_count}人 · 空间：{space or '未知'}｜{voice_summary or '无语音内容'}"
+        nav_summary = NavigationSummary(
+            persons=[f"{person_count}人"],
+            topics=[space] if space else [],
         )
-        scene_value = session.scene.value if session.scene else "meeting"
-        extract_context = (transcript_text + "\n" + visual_context).strip()
-
-        events_data = await llm.extract_events(extract_context, scene_value)
-        for ed in events_data:
-            try:
-                et = EventType(ed["type"])
-            except (ValueError, KeyError):
-                et = EventType.BUSINESS_SEMANTIC
-            event = Event(
-                memory_id=memory.id,
-                event_type=et,
-                start_ms=ed.get("start_ms", 0),
-                label=ed.get("label", ""),
-                confidence=_confidence(ed.get("confidence", "medium")),
-            )
-            await self.repo.save_event(event)
-
-        # 实体/人物抽取（无硬编码）：LLM 产出候选，跨记忆按名+分区归并，禁跨分区。
-        entities_data = await llm.extract_entities(extract_context, scene_value)
-        for en in entities_data:
-            name = (en.get("name") or "").strip()
-            if not name:
-                continue
-            etype = (en.get("type") or "person").strip()
-            conf = _confidence(en.get("confidence", "low"))
-            if etype == "person":
-                await self.person_service.ensure_person(
-                    name=name,
-                    partition=memory.partition,
-                    memory_id=memory.id,
-                    confidence=conf,
-                    role=en.get("role"),
-                )
-            else:
-                existing = await self.repo.find_entity(name, etype, memory.partition)
-                if existing:
-                    if memory.id not in existing.memory_ids:
-                        existing.memory_ids.append(memory.id)
-                        await self.repo.update_entity(
-                            existing.id, memory_ids=existing.memory_ids
-                        )
-                else:
-                    await self.repo.save_entity(
-                        Entity(
-                            entity_type=etype,
-                            name=name,
-                            partition=memory.partition,
-                            confidence=conf,
-                            memory_ids=[memory.id],
-                        )
-                    )
-
-        # 并行时空候选绑定：同分区、时间窗重叠的空间记忆生成候选绑定，待用户确认。
-        await self._create_candidate_bindings(memory)
-
-        identify_brief = await self.memory_builder.build_identify_brief(memory, transcript_text)
-        nav_summary = await self.memory_builder.build_navigation_summary(memory, transcript_text)
 
         duration = int((datetime.utcnow() - session.created_at).total_seconds())
         memory = await self.repo.update_time_memory(
@@ -278,32 +180,33 @@ class IngestPipeline:
             ended_at=datetime.utcnow(),
         )
         await self.repo.link_session_memory(session.id, memory.id, MemoryStatus.COMPLETED)
+        log.info("时间记忆已保存 memory=%s duration=%ds", memory.id, duration)
         return memory
 
-    async def _create_candidate_bindings(self, memory: TimeMemory) -> None:
-        """为并行采集的空间记忆生成候选时空绑定（同分区 + 时间窗重叠）。"""
-        if not memory.started_at or not memory.ended_at:
-            return
-        spaces, _ = await self.repo.list_space_memories(partition=memory.partition)
-        for space in spaces:
-            if not space.captured_at:
-                continue
-            # 空间采集时间落在时间记忆窗口内视为并行
-            if memory.started_at <= space.captured_at <= memory.ended_at:
-                existing = await self.repo.list_bindings(
-                    time_memory_id=memory.id, space_memory_id=space.id
-                )
-                if existing:
-                    continue
-                await self.repo.save_binding(
-                    Binding(
-                        binding_type=BindingType.CANDIDATE,
-                        time_memory_id=memory.id,
-                        space_memory_id=space.id,
-                        confidence=ConfidenceLevel.LOW,
-                        user_confirmed=False,
-                    )
-                )
+    async def _transcribe_all_audio(self, asr, audio_paths: list[str]) -> str:
+        """把所有 PCM 音频块合并成一段 WAV，只调用一次 ASR，返回全量转写文本。"""
+        if not audio_paths:
+            return ""
+        pcm = bytearray()
+        for p in audio_paths:
+            try:
+                pcm += Path(p).read_bytes()
+            except OSError as e:
+                log.warning("读取音频块失败 %s: %s", p, e)
+        if not pcm:
+            return ""
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            wav_path = tmp.name
+        try:
+            with wave.open(wav_path, "wb") as w:
+                w.setnchannels(_AUDIO_CHANNELS)
+                w.setsampwidth(_AUDIO_SAMPLE_WIDTH)
+                w.setframerate(_AUDIO_SAMPLE_RATE)
+                w.writeframes(bytes(pcm))
+            segments = await asr.transcribe(wav_path)
+            return " ".join(s.text for s in segments if s.text).strip()
+        finally:
+            Path(wav_path).unlink(missing_ok=True)
 
     async def _process_space_session(
         self, session: IngestSession, frame_paths: list[str]

@@ -62,6 +62,13 @@ class MockVisionProvider(VisionProvider):
       return False
     return True
 
+  async def summarize_session(self, transcript: str, image_path: Optional[str]) -> dict:
+    return {
+      "person_count": 2,
+      "space": "会议室",
+      "voice_summary": (transcript[:120] if transcript else "本段记忆无语音内容"),
+    }
+
 
 class MockOCRProvider(OCRProvider):
   async def extract_text(self, image_path: str) -> OCRResult:

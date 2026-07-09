@@ -1,8 +1,8 @@
-2026-07-08 18:11:34 | INFO  | echo | logging initialized -> /Users/saas/GitHub/echo/backend/log/echo.log
-INFO:     Started server process [45412]
+2026-07-09 12:13:21 | INFO  | echo | logging initialized -> /Users/saas/GitHub/echo/backend/log/echo.log
+INFO:     Started server process [8125]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-2026-07-08 18:11:40 | INFO  | echo.request | 收到请求 GET /health (来自 127.0.0.1)
-2026-07-08 18:11:40 | INFO  | echo.request | 返回响应 GET /health -> 200 (1.3ms)
-INFO:     127.0.0.1:52491 - "GET /health HTTP/1.1" 200 OK
+2026-07-09 12:13:24 | INFO  | echo.request | 收到请求 GET /api/v1/memories (来自 127.0.0.1)
+2026-07-09 12:13:24 | INFO  | echo.request | 返回响应 GET /api/v1/memories -> 200 (12.4ms)
+INFO:     127.0.0.1:61199 - "GET /api/v1/memories HTTP/1.1" 200 OK

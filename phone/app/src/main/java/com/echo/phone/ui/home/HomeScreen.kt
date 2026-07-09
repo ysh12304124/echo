@@ -48,7 +48,7 @@ class HomeViewModel(
         viewModelScope.launch {
             loading = true
             try {
-                memories = repo.listMemories(partitionFilter)
+                memories = repo.listMemories(partitionFilter).sortedByDescending { it.startedAt }
                 error = null
             } catch (e: Exception) {
                 error = e.message
@@ -154,8 +154,8 @@ private fun MemoryCard(memory: MemorySummary, onClick: () -> Unit) {
                 buildString {
                     memory.startedAt?.let {
                         // display as HH:mm  e.g. "14:30"
-                        val t = it.substringAfter("T").substringBefore(".")
-                        if (t.length >= 5) append(t.substring(0, 5))
+                        val date = it.substringBefore("T").substring(5); val t = it.substringAfter("T").substringBefore(".")
+                        append(date + " "); if (t.length >= 5) append(t.substring(0, 5))
                     }
                     memory.scene?.let { append(" " + it.name) }
                     append(" · ")

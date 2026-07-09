@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from app.domain.enums import (
     ConfidenceLevel,
@@ -54,6 +54,11 @@ class MemorySummaryResponse(BaseModel):
     duration_seconds: int = 0
     evidence_status: str = "pending"
     is_favorited: bool = False
+
+    @field_serializer("started_at")
+    def _format_started_at(self, value: Optional[datetime]) -> Optional[str]:
+        # 输出为 "YYYY-MM-DD HH:MM:SS"（与后端日志时间格式一致）。
+        return value.strftime("%Y-%m-%d %H:%M:%S") if value else None
 
 
 class MemoryListResponse(BaseModel):

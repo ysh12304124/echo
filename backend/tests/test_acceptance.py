@@ -103,7 +103,7 @@ async def test_case1_meeting_global_query(client: AsyncClient):
     moment = nav["key_moments"][0]
     assert moment["description"] == ""
     assert moment["image_url"].startswith("/api/v1/media/sessions/")
-    assert moment["imageUrl"] == moment["image_url"]
+    assert "imageUrl" not in moment
 
     resp = await client.post("/api/v1/query", json={
         "question": "张经理承诺了什么？",

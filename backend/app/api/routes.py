@@ -86,7 +86,6 @@ def _navigation_summary_response(memory) -> Optional[NavigationSummary]:
         return None
     nav = memory.navigation_summary or NavigationSummary()
     key_moments = []
-    evidence_entries = []
     for index, frame in enumerate(memory.key_frames, start=1):
         media_path = frame.get("media_path") or ""
         if not media_path:
@@ -101,29 +100,14 @@ def _navigation_summary_response(memory) -> Optional[NavigationSummary]:
                 "label": label,
                 "description": description,
                 "time_offset_seconds": timestamp_ms // 1000,
-                "timeOffsetSeconds": timestamp_ms // 1000,
                 "image_url": media_url,
-                "imageUrl": media_url,
                 "type": "visual",
-                "confidence": "high",
-            }
-        )
-        evidence_entries.append(
-            {
-                "type": "visual",
-                "label": label,
-                "description": description,
-                "media_url": media_url,
-                "mediaUrl": media_url,
-                "timestamp_ms": timestamp_ms,
-                "timestampMs": timestamp_ms,
                 "confidence": "high",
             }
         )
 
     if key_moments:
         nav.key_moments = key_moments
-        nav.evidence_entries = evidence_entries
     return nav
 
 

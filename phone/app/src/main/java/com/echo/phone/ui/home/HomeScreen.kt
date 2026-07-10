@@ -1,5 +1,7 @@
 package com.echo.phone.ui.home
 
+import android.content.Context
+import android.view.HapticFeedbackConstants
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -7,12 +9,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.FiberManualRecord
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -27,6 +27,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -54,9 +55,10 @@ class HomeViewModel(
         private set
     var isRefreshing by mutableStateOf(false)
         private set
+    var revealNew by mutableStateOf(false)
+        private set
 
     val deviceStatus = glasses.deviceStatus.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DeviceStatus(false))
-
     init { refresh() }
 
     fun refresh() {
@@ -64,10 +66,17 @@ class HomeViewModel(
             isRefreshing = true
             try { memories = repo.listMemories(partitionFilter).sortedByDescending { it.startedAt }; error = null }
             catch (e: Exception) { error = e.message }
-            // 最小刷新动画时长 600ms，让用户感知到刷新
-            delay(600)
-            isRefreshing = false
-            loading = false
+            delay(600); isRefreshing = false; loading = false
+        }
+    }
+
+    fun refreshWithReveal() {
+        viewModelScope.launch {
+            isRefreshing = true; revealNew = true
+            try { memories = repo.listMemories(partitionFilter).sortedByDescending { it.startedAt } }
+            catch (e: Exception) { error = e.message }
+            delay(800); isRefreshing = false; loading = false
+            delay(600); revealNew = false
         }
     }
 
@@ -91,14 +100,25 @@ private fun sceneAccent(scene: TimeScene?): Color = when (scene) {
     null -> Color(0xFF9CA3AF)
 }
 private val MonoFont = FontFamily.Monospace
+private val TimelineGray = Color(0xFFE5E7EB)
 
+// ── 呼吸灯 — 录制指示器 ──
 @Composable
-private fun RecordingDot(isActive: Boolean) {
-    val t = rememberInfiniteTransition(label = "pulse")
-    val a by t.animateFloat(0.3f, 1f, infiniteRepeatable(tween(900, easing = EaseInOutCubic), RepeatMode.Reverse), label = "pulseA")
-    Box(Modifier.size(6.dp).alpha(if (isActive) a else 0.3f).clip(CircleShape).background(if (isActive) Color(0xFFEF4444) else Color(0xFFD1D5DB)))
+private fun BreathingDot(isActive: Boolean) {
+    val t = rememberInfiniteTransition(label = "breath")
+    val scale by t.animateFloat(0.6f, 1.4f, infiniteRepeatable(tween(1200, easing = EaseInOutCubic), RepeatMode.Reverse), label = "s")
+    val alpha by t.animateFloat(0.4f, 1f, infiniteRepeatable(tween(1200, easing = EaseInOutCubic), RepeatMode.Reverse), label = "a")
+    Box(
+        Modifier
+            .size(8.dp)
+            .scale(if (isActive) scale else 1f)
+            .alpha(if (isActive) alpha else 0.3f)
+            .clip(CircleShape)
+            .background(if (isActive) Color(0xFFEF4444) else Color(0xFFD1D5DB))
+    )
 }
 
+// ── 骨架 ──
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SkeletonCard() {
@@ -122,10 +142,19 @@ fun HomeScreen(
         override fun <T : ViewModel> create(cls: Class<T>): T = HomeViewModel(app.repository, app.glassesConnection, partitionFilter) as T
     })
     val ds by vm.deviceStatus.collectAsState()
-    // 录制完成自动刷新
-    LaunchedEffect(Unit) { app.recordingCompleted.collect { vm.refresh() } }
+    val view = LocalView.current
+
+    // 录制完成 → 带揭晓动画的刷新
+    LaunchedEffect(Unit) {
+        app.recordingCompleted.collect { vm.refreshWithReveal() }
+    }
 
     val isRec = ds.isRecordingTime || ds.isRecordingSpace
+
+    // 录制开始 → 震动
+    LaunchedEffect(isRec) {
+        if (isRec) view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+    }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp).padding(top = 20.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -133,11 +162,11 @@ fun HomeScreen(
         }
         Spacer(Modifier.height(12.dp))
 
-        // 设备状态 — 眼镜连接状态自动通过 StateFlow 刷新
+        // 设备状态
         Box(Modifier.fillMaxWidth().shadow(8.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(GlassBgElevated).border(1.dp, GlassBorderElevated, RoundedCornerShape(18.dp)).padding(16.dp)) {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    RecordingDot(isRec)
+                    BreathingDot(isRec)
                     Spacer(Modifier.width(10.dp))
                     Text(if (ds.connected) "眼镜已连接 · 电量 ${ds.batteryPercent}%" else "未连接", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                     if (!ds.connected) FilledTonalButton(onClick = { vm.connectGlasses() }, modifier = Modifier.height(34.dp)) { Text("连接") }
@@ -153,11 +182,7 @@ fun HomeScreen(
         Spacer(Modifier.height(24.dp))
         Text("最近记忆", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
 
-        // 下拉刷新
-        PullToRefreshBox(
-            isRefreshing = vm.isRefreshing,
-            onRefresh = { vm.refresh() },
-        ) {
+        PullToRefreshBox(isRefreshing = vm.isRefreshing, onRefresh = { vm.refresh() }) {
             AnimatedContent(
                 targetState = when { vm.loading && !vm.isRefreshing -> "loading"; vm.memories.isEmpty() && !vm.isRefreshing -> "empty"; vm.error != null -> "error"; else -> "list" },
                 transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(150)) },
@@ -169,15 +194,16 @@ fun HomeScreen(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("⏳", style = MaterialTheme.typography.headlineLarge)
                             Text("暂无记忆", style = MaterialTheme.typography.bodyLarge, color = Color(0xFF6B7280))
-                            Text("戴上眼镜，选择场景后开始记录", style = MaterialTheme.typography.bodySmall, color = Color(0xFF6B7280))
                         }
                     }
-                    "error" -> Column {
-                        Text("加载失败: ${vm.error}", color = MaterialTheme.colorScheme.error)
-                        TextButton(onClick = { vm.refresh() }) { Text("重试") }
-                    }
-                    else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        items(vm.memories) { memory -> MemoryCard(memory) { onNavigateMemory(memory.memoryId) } }
+                    "error" -> Column { Text("加载失败: ${vm.error}", color = MaterialTheme.colorScheme.error); TextButton(onClick = { vm.refresh() }) { Text("重试") } }
+                    else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                        itemsIndexed(vm.memories) { i, memory ->
+                            val isFirst = i == 0
+                            TimelineItem(i, vm.memories.size, vm.revealNew && isFirst) {
+                                MemoryCard(memory) { onNavigateMemory(memory.memoryId) }
+                            }
+                        }
                     }
                 }
             }
@@ -185,13 +211,42 @@ fun HomeScreen(
     }
 }
 
+// ── 时间轴节点 + 揭晓动画 ──
+@Composable
+private fun TimelineItem(index: Int, total: Int, reveal: Boolean, content: @Composable () -> Unit) {
+    val isFirst = index == 0
+    val isLast = index == total - 1
+    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+        // 时间轴线
+        Box(Modifier.width(24.dp).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
+            // 上方连线
+            if (!isFirst) {
+                Box(Modifier.width(2.dp).height(12.dp).background(TimelineGray))
+            }
+            Spacer(Modifier.height(12.dp))
+            // 节点圆点
+            Box(Modifier.size(8.dp).clip(CircleShape).background(if (isFirst) sceneAccent(null) else TimelineGray))
+            // 下方连线
+            if (!isLast) {
+                Box(Modifier.width(2.dp).fillMaxHeight().padding(top = 8.dp).background(TimelineGray))
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        // 卡片内容 — 揭晓动画
+        Box(Modifier.weight(1f).padding(vertical = 6.dp)) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = true,
+                enter = if (reveal) expandVertically(spring(dampingRatio = 0.6f, stiffness = 300f)) + fadeIn(tween(300)) else fadeIn(tween(200)),
+            ) { content() }
+        }
+    }
+}
+
 @Composable
 private fun MemoryCard(memory: MemorySummary, onClick: () -> Unit) {
-    var pressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (pressed) 0.98f else 1f, tween(120), label = "cardScale")
     val accent = sceneAccent(memory.scene)
     Card(
-        Modifier.fillMaxWidth().scale(scale).shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).clickable { onClick() },
+        Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).clickable { onClick() },
         colors = CardDefaults.cardColors(containerColor = Color.Transparent),
     ) {
         Box(Modifier.background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp))) {

@@ -3,6 +3,7 @@ package com.echo.phone.ui.memory
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
@@ -190,14 +191,27 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
                 item {
                     DetailSection("关键瞬间") {
                         memory.keyFrames.forEach { kf ->
+                            var showFull by remember { mutableStateOf(false) }
                             val imgUrl = app.repository.absoluteMediaUrl(kf.mediaUrl)
                             androidx.compose.runtime.key(kf.filename) {
                                 AsyncImage(
                                     model = imgUrl,
                                     contentDescription = "关键帧",
-                                    modifier = Modifier.fillMaxWidth().height(180.dp).padding(vertical = 4.dp).clip(RoundedCornerShape(12.dp)),
+                                    modifier = Modifier.fillMaxWidth().height(180.dp).padding(vertical = 4.dp).clip(RoundedCornerShape(12.dp)).clickable { showFull = true },
                                     contentScale = ContentScale.Crop,
                                 )
+                                if (showFull) {
+                                    androidx.compose.ui.window.Dialog(onDismissRequest = { showFull = false }) {
+                                        Box(Modifier.fillMaxSize().clickable { showFull = false }, contentAlignment = Alignment.Center) {
+                                            AsyncImage(
+                                                model = imgUrl,
+                                                contentDescription = "关键帧", 
+                                                modifier = Modifier.fillMaxWidth().padding(16.dp).clip(RoundedCornerShape(16.dp)),
+                                                contentScale = ContentScale.Fit,
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -208,8 +222,8 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
             item {
                 DetailSection("时间") {
                     val timeText = memory.startedAt?.let {
-                        val date = it.substringBefore("T")
-                        val t = it.substringAfter("T").substringBefore(".").substring(0, 5)
+                        val date = it.substring(0, 10)
+                        val t = it.substring(11, 16)
                         "$date $t"
                     } ?: "未知"
                     Text(timeText, style = MaterialTheme.typography.bodyMedium)

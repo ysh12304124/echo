@@ -147,6 +147,7 @@ class MemoryRepository:
                 if memory.navigation_summary
                 else None
             ),
+            key_frames=json.dumps(memory.key_frames),
             evidence_status=memory.evidence_status,
             is_favorited=memory.is_favorited,
             is_locked=memory.is_locked,
@@ -178,6 +179,7 @@ class MemoryRepository:
             duration_seconds=orm.duration_seconds,
             identify_brief=orm.identify_brief,
             navigation_summary=nav,
+            key_frames=_parse_json(orm.key_frames),
             evidence_status=orm.evidence_status,
             is_favorited=orm.is_favorited,
             is_locked=orm.is_locked,
@@ -222,6 +224,7 @@ class MemoryRepository:
                     duration_seconds=orm.duration_seconds,
                     identify_brief=orm.identify_brief,
                     navigation_summary=nav,
+                    key_frames=_parse_json(orm.key_frames),
                     evidence_status=orm.evidence_status,
                     is_favorited=orm.is_favorited,
                     is_locked=orm.is_locked,
@@ -236,6 +239,8 @@ class MemoryRepository:
             if v is not None:
                 if k == "navigation_summary" and isinstance(v, NavigationSummary):
                     values[k] = v.model_dump_json()
+                elif k == "key_frames" and isinstance(v, list):
+                    values[k] = json.dumps(v)
                 elif hasattr(v, "value"):
                     values[k] = v.value
                 else:

@@ -12,7 +12,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FiberManualRecord
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -117,7 +116,6 @@ fun HomeScreen(
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp).padding(top = 20.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text(title, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface)
-            IconButton(onClick = { vm.refresh() }) { Icon(Icons.Default.Refresh, "刷新", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         Spacer(Modifier.height(12.dp))
 
@@ -127,7 +125,7 @@ fun HomeScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     RecordingDot(isRec)
                     Spacer(Modifier.width(10.dp))
-                    Text(if (ds.connected) "已连接 · 电量 ${ds.batteryPercent}%" else "未连接", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    Text(if (ds.connected) "眼镜已连接 · 电量 ${ds.batteryPercent}%" else "未连接", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                     if (!ds.connected) FilledTonalButton(onClick = { vm.connectGlasses() }, modifier = Modifier.height(34.dp)) { Text("连接") }
                 }
                 // 录制中 — 内嵌在 Column 中，在 Row 下方，不重叠
@@ -188,7 +186,7 @@ private fun MemoryCard(memory: MemorySummary, onClick: () -> Unit) {
                     Spacer(Modifier.height(6.dp))
                     Text(
                         buildString {
-                            memory.startedAt?.let { append(it.substringBefore("T") + " " + it.substringAfter("T").substringBefore(".").substring(0, 5)) }
+                            memory.startedAt?.let { append(it.substring(0, 10) + " " + it.substring(11, 16)) }
                             memory.scene?.let { append("  ${it.name}") }
                             if (memory.durationSeconds > 0) append("  ${memory.durationSeconds}s")
                         },

@@ -104,6 +104,7 @@ class TimeMemory(BaseModel):
     duration_seconds: int = 0
     identify_brief: str = ""
     navigation_summary: Optional[NavigationSummary] = None
+    key_frames: list[dict] = Field(default_factory=list)
     evidence_status: str = "pending"
     is_favorited: bool = False
     is_locked: bool = False

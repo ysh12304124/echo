@@ -174,9 +174,7 @@ class IngestPipeline:
             )
 
         duration = int((datetime.now(timezone.utc) - _as_utc(session.created_at)).total_seconds())
-        key_moments, evidence_entries = await self._build_key_frame_navigation(
-            memory.id, session.id, frame_paths, duration
-        )
+        key_frames = self._select_key_frames(session.id, frame_paths, duration)
 
         # 组织可读摘要：时间由 started_at/duration 体现，人物数量/空间/语音总结落到展示字段。
         identify_brief = f"共{person_count}人 · 空间：{space or '未知'}｜{voice_summary or '无语音内容'}"
@@ -184,8 +182,6 @@ class IngestPipeline:
             persons=[f"{person_count}人"],
             topics=[space] if space else [],
             spaces=[space] if space else [],
-            key_moments=key_moments,
-            evidence_entries=evidence_entries,
         )
 
         memory = await self.repo.update_time_memory(
@@ -193,6 +189,7 @@ class IngestPipeline:
             status=MemoryStatus.COMPLETED,
             identify_brief=identify_brief,
             navigation_summary=nav_summary,
+            key_frames=key_frames,
             evidence_status="ready",
             duration_seconds=duration,
             title=memory.title or identify_brief,
@@ -202,65 +199,35 @@ class IngestPipeline:
         log.info("时间记忆已保存 memory=%s duration=%ds", memory.id, duration)
         return memory
 
-    async def _build_key_frame_navigation(
+    def _select_key_frames(
         self,
-        memory_id: UUID,
         session_id: UUID,
         frame_paths: list[str],
         duration_seconds: int,
-    ) -> tuple[list[dict], list[dict]]:
-        """Expose a few evenly sampled frames as visual moments."""
-        key_moments: list[dict] = []
-        evidence_entries: list[dict] = []
+    ) -> list[dict]:
+        """Persist the selected key frame markers once at complete time."""
+        key_frames: list[dict] = []
         if not frame_paths:
-            return key_moments, evidence_entries
+            return key_frames
 
-        for order, index in enumerate(self._select_key_frame_indexes(len(frame_paths)), start=1):
+        for index in self._select_key_frame_indexes(len(frame_paths)):
             frame_path = frame_paths[index]
             media_key = self._frame_media_key(session_id, frame_path)
             timestamp_ms = self._estimate_frame_timestamp_ms(
                 index, len(frame_paths), duration_seconds
             )
-            ev = Evidence(
-                memory_id=memory_id,
-                type=EvidenceType.VISUAL,
-                content="关键帧图片",
-                media_path=media_key,
-                timestamp_ms=timestamp_ms,
-                confidence=ConfidenceLevel.HIGH,
-                metadata={"frame_index": index},
-            )
-            await self.repo.save_evidence(ev)
-            media_url = f"/api/v1/media/{media_key}"
-            moment = {
-                "id": f"frame-{order}",
-                "label": "",
-                "description": "",
-                "time_offset_seconds": timestamp_ms // 1000,
-                "timeOffsetSeconds": timestamp_ms // 1000,
-                "image_url": media_url,
-                "imageUrl": media_url,
-                "evidence_id": str(ev.id),
-                "evidenceId": str(ev.id),
-                "type": "visual",
-                "confidence": ev.confidence.value,
-            }
-            key_moments.append(moment)
-            evidence_entries.append(
+            key_frames.append(
                 {
-                    "type": "visual",
-                    "label": "",
-                    "media_url": media_url,
-                    "mediaUrl": media_url,
+                    "media_path": media_key,
+                    "filename": Path(frame_path).name,
+                    "frame_index": index,
                     "timestamp_ms": timestamp_ms,
-                    "timestampMs": timestamp_ms,
-                    "evidence_id": str(ev.id),
-                    "evidenceId": str(ev.id),
-                    "confidence": ev.confidence.value,
+                    "label": "",
+                    "description": "",
                 }
             )
 
-        return key_moments, evidence_entries
+        return key_frames
 
     def _select_key_frame_indexes(self, frame_count: int) -> list[int]:
         if frame_count <= 0:

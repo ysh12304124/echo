@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import BindingType, DataPartition, MemoryStatus, MemoryType, TimeScene
-from app.domain.models import SpaceMemory, TimeMemory
+from app.domain.models import NavigationSummary, SpaceMemory, TimeMemory
 from app.providers import get_provider_factory
 from app.repositories.database import get_db
 from app.repositories.memory_repo import MemoryRepository
@@ -79,6 +79,52 @@ def _session_frame_key(session_id: UUID, filename: str) -> str:
 def _session_frame_url(session_id: UUID, filename: str) -> str:
     filename = _validate_frame_filename(filename)
     return f"/api/v1/ingest/sessions/{session_id}/frames/{filename}"
+
+
+def _navigation_summary_response(memory) -> Optional[NavigationSummary]:
+    if not memory.navigation_summary and not memory.key_frames:
+        return None
+    nav = memory.navigation_summary or NavigationSummary()
+    key_moments = []
+    evidence_entries = []
+    for index, frame in enumerate(memory.key_frames, start=1):
+        media_path = frame.get("media_path") or ""
+        if not media_path:
+            continue
+        media_url = f"/api/v1/media/{media_path}"
+        timestamp_ms = int(frame.get("timestamp_ms") or 0)
+        label = frame.get("label") or ""
+        description = frame.get("description") or label
+        key_moments.append(
+            {
+                "id": f"frame-{index}",
+                "label": label,
+                "description": description,
+                "time_offset_seconds": timestamp_ms // 1000,
+                "timeOffsetSeconds": timestamp_ms // 1000,
+                "image_url": media_url,
+                "imageUrl": media_url,
+                "type": "visual",
+                "confidence": "high",
+            }
+        )
+        evidence_entries.append(
+            {
+                "type": "visual",
+                "label": label,
+                "description": description,
+                "media_url": media_url,
+                "mediaUrl": media_url,
+                "timestamp_ms": timestamp_ms,
+                "timestampMs": timestamp_ms,
+                "confidence": "high",
+            }
+        )
+
+    if key_moments:
+        nav.key_moments = key_moments
+        nav.evidence_entries = evidence_entries
+    return nav
 
 
 # --- Ingest ---
@@ -291,7 +337,7 @@ async def get_memory(memory_id: UUID, repo: MemoryRepository = Depends(get_repo)
         ended_at=memory.ended_at,
         duration_seconds=memory.duration_seconds,
         identify_brief=memory.identify_brief,
-        navigation_summary=memory.navigation_summary,
+        navigation_summary=_navigation_summary_response(memory),
         evidence_status=memory.evidence_status,
         is_favorited=memory.is_favorited,
         is_locked=memory.is_locked,

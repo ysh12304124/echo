@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, select
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -42,6 +42,7 @@ class TimeMemoryORM(Base):
     duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
     identify_brief: Mapped[str] = mapped_column(String(500), default="")
     navigation_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    key_frames: Mapped[str] = mapped_column(Text, default="[]")
     evidence_status: Mapped[str] = mapped_column(String(50), default="pending")
     is_favorited: Mapped[bool] = mapped_column(Boolean, default=False)
     is_locked: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -146,6 +147,10 @@ async def init_db():
     Path("./data").mkdir(parents=True, exist_ok=True)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        result = await conn.execute(text("PRAGMA table_info(time_memories)"))
+        columns = {row[1] for row in result.fetchall()}
+        if "key_frames" not in columns:
+            await conn.execute(text("ALTER TABLE time_memories ADD COLUMN key_frames TEXT DEFAULT '[]'"))
 
 
 async def get_db() -> AsyncSession:

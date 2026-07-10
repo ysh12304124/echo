@@ -20,10 +20,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
-import coil.compose.AsyncImage
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -190,26 +193,25 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
             if (memory.keyFrames.isNotEmpty()) {
                 item {
                     DetailSection("关键瞬间") {
-                        memory.keyFrames.forEach { kf ->
-                            var showFull by remember { mutableStateOf(false) }
-                            val imgUrl = app.repository.absoluteMediaUrl(kf.mediaUrl)
-                            androidx.compose.runtime.key(kf.filename) {
+                        var selectedIndex by remember { mutableIntStateOf(-1) }
+                        Column {
+                            memory.keyFrames.forEachIndexed { idx, kf ->
+                                val imgUrl = app.repository.absoluteMediaUrl(kf.mediaUrl)
                                 AsyncImage(
                                     model = imgUrl,
                                     contentDescription = "关键帧",
-                                    modifier = Modifier.fillMaxWidth().height(180.dp).padding(vertical = 4.dp).clip(RoundedCornerShape(12.dp)).clickable { showFull = true },
-                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(12.dp)).clickable { selectedIndex = idx },
+                                    contentScale = ContentScale.FillWidth,
                                 )
-                                if (showFull) {
-                                    androidx.compose.ui.window.Dialog(onDismissRequest = { showFull = false }) {
-                                        Box(Modifier.fillMaxSize().clickable { showFull = false }, contentAlignment = Alignment.Center) {
-                                            AsyncImage(
-                                                model = imgUrl,
-                                                contentDescription = "关键帧", 
-                                                modifier = Modifier.fillMaxWidth().padding(16.dp).clip(RoundedCornerShape(16.dp)),
-                                                contentScale = ContentScale.Fit,
-                                            )
-                                        }
+                            }
+                        }
+                        if (selectedIndex >= 0) {
+                            androidx.compose.ui.window.Dialog(onDismissRequest = { selectedIndex = -1 }) {
+                                Box(Modifier.fillMaxSize().clickable { selectedIndex = -1 }, contentAlignment = Alignment.Center) {
+                                    val pagerState = rememberPagerState(initialPage = selectedIndex, pageCount = { memory.keyFrames.size })
+                                    HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                                        val imgUrl = app.repository.absoluteMediaUrl(memory.keyFrames[page].mediaUrl)
+                                        AsyncImage(model = imgUrl, contentDescription = "关键帧", modifier = Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit)
                                     }
                                 }
                             }

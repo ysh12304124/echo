@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-KEY_FRAME_COUNT = 999
+KEY_FRAME_COUNT = 3
 
 
 def select_key_frame_indexes(frame_count: int) -> list[int]:

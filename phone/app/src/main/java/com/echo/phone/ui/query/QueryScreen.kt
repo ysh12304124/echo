@@ -6,7 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -27,6 +27,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.echo.phone.EchoApplication
 import com.echo.phone.domain.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class QueryViewModel(private val repo: com.echo.phone.data.EchoRepository) : ViewModel() {
@@ -35,21 +36,19 @@ class QueryViewModel(private val repo: com.echo.phone.data.EchoRepository) : Vie
     var result by mutableStateOf<QueryResult?>(null)
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
-    var selectedMemoryId by mutableStateOf<String?>(null)
-    var selectedSpaceId by mutableStateOf<String?>(null)
 
     fun submit() {
         if (question.isBlank()) return
         viewModelScope.launch {
             loading = true; error = null
-            try { result = repo.query(question, scope, selectedMemoryId, selectedSpaceId) }
+            try { result = repo.query(question, scope, null, null) }
             catch (e: Exception) { error = e.message }
             loading = false
         }
     }
 }
 
-private fun evidenceIcon(type: EvidenceType): ImageVector = when (type) {
+private fun evIcon(t: EvidenceType): ImageVector = when (t) {
     EvidenceType.VISUAL -> Icons.Default.Image
     EvidenceType.TRANSCRIPT -> Icons.Default.Mic
     EvidenceType.OCR -> Icons.Default.TextFields
@@ -57,48 +56,45 @@ private fun evidenceIcon(type: EvidenceType): ImageVector = when (type) {
     EvidenceType.USER_NOTE -> Icons.Default.Notes
 }
 
-private val GlassBg = Brush.verticalGradient(
-    listOf(Color.White.copy(alpha = 0.08f), Color.White.copy(alpha = 0.04f))
-)
-private val GlassBorder = Color.White.copy(alpha = 0.10f)
+private val GlassBg = Brush.verticalGradient(listOf(Color(0xFFFFFFFF), Color(0xFFF8F9FC)))
+private val GlassBorder = Color(0xFFE2E4EA)
+
+// ── Staggered evidence items ──
+@Composable
+private fun StaggeredItem(index: Int, content: @Composable () -> Unit) {
+    val visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { delay(index * 50L); visible = true }
+    AnimatedVisibility(visible, enter = fadeIn(tween(400)) + slideInVertically(tween(400)) { it / 3 }) { content() }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QueryScreen(onNavigateMemory: (String) -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as EchoApplication
-    val vm: QueryViewModel = viewModel(
-        factory = object : androidx.lifecycle.ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(cls: Class<T>): T =
-                QueryViewModel(app.repository) as T
-        }
-    )
+    val vm: QueryViewModel = viewModel(factory = object : androidx.lifecycle.ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(cls: Class<T>): T = QueryViewModel(app.repository) as T
+    })
 
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp).padding(top = 20.dp)) {
-        Text("查询", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface)
+        Text("查询", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(14.dp))
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            QueryScope.entries.forEach { s ->
-                FilterChip(
-                    selected = vm.scope == s,
-                    onClick = { vm.scope = s },
-                    label = { Text(when(s) { QueryScope.GLOBAL_WORK -> "全局工作"; QueryScope.MEMORY -> "当前记忆"; QueryScope.SPACE -> "当前空间" }) },
-                )
-            }
+            FilterChip(selected = vm.scope == QueryScope.GLOBAL_WORK, onClick = { vm.scope = QueryScope.GLOBAL_WORK }, label = { Text("全局工作") })
+            FilterChip(selected = vm.scope == QueryScope.MEMORY, onClick = { vm.scope = QueryScope.MEMORY }, label = { Text("当前记忆") })
+            FilterChip(selected = vm.scope == QueryScope.SPACE, onClick = { vm.scope = QueryScope.SPACE }, label = { Text("当前空间") })
         }
         Spacer(Modifier.height(14.dp))
 
         OutlinedTextField(
             value = vm.question,
             onValueChange = { vm.question = it },
-            modifier = Modifier.fillMaxWidth().shadow(if (vm.question.isNotEmpty()) 4.dp else 0.dp, RoundedCornerShape(10.dp)),
+            modifier = Modifier.fillMaxWidth().shadow(if (vm.question.isNotEmpty()) 2.dp else 0.dp, RoundedCornerShape(10.dp)),
             placeholder = { Text("例如：张经理承诺了什么？") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
-            trailingIcon = {
-                if (vm.question.isNotBlank()) IconButton(onClick = { vm.submit() }, enabled = !vm.loading) { Icon(Icons.Default.Send, "查询") }
-            },
+            trailingIcon = { if (vm.question.isNotBlank()) IconButton(onClick = { vm.submit() }, enabled = !vm.loading) { Icon(Icons.Default.Send, "查询") } },
             singleLine = true,
             shape = MaterialTheme.shapes.small,
             colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary),
@@ -112,10 +108,8 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
         ) { state ->
             when (state) {
                 "loading" -> CircularProgressIndicator()
-                "error" -> Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.Transparent)) {
-                    Box(Modifier.background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)).padding(16.dp)) {
-                        Text("查询失败: ${vm.error}", color = MaterialTheme.colorScheme.error)
-                    }
+                "error" -> Box(Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)).padding(18.dp)) {
+                    Text("查询失败: ${vm.error}", color = MaterialTheme.colorScheme.error)
                 }
                 "result" -> QueryResultView(vm.result!!)
             }
@@ -125,68 +119,49 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
 
 @Composable
 private fun QueryResultView(result: QueryResult) {
-    when (result.status) {
-        QueryResultStatus.CONFIRMED -> {
-            Box(
-                Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp))
-                    .background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)).padding(18.dp)
-            ) {
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("确定答案", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Text(result.answer ?: "", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                }
+    val bg = when (result.status) {
+        QueryResultStatus.CONFIRMED -> Color(0xFFDBEAFE)
+        QueryResultStatus.POSSIBLE -> Color(0xFFFEF3C7)
+        QueryResultStatus.NOT_FOUND -> Color(0xFFF3F4F6)
+    }
+    val icon = when (result.status) { QueryResultStatus.CONFIRMED -> Icons.Default.CheckCircle; QueryResultStatus.POSSIBLE -> Icons.Default.Warning; QueryResultStatus.NOT_FOUND -> Icons.Default.Info }
+    val label = when (result.status) { QueryResultStatus.CONFIRMED -> "确定答案"; QueryResultStatus.POSSIBLE -> "可能相关"; QueryResultStatus.NOT_FOUND -> "没有找到" }
+    val iconTint = when (result.status) { QueryResultStatus.CONFIRMED -> Color(0xFF2563EB); QueryResultStatus.POSSIBLE -> Color(0xFFD97706); QueryResultStatus.NOT_FOUND -> Color(0xFF9CA3AF) }
+
+    Box(Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(bg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)).padding(18.dp)) {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, tint = iconTint, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = iconTint)
             }
-        }
-        QueryResultStatus.POSSIBLE -> {
-            Box(
-                Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp))
-                    .background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)).padding(18.dp)
-            ) {
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Warning, null, tint = Color(0xFFF59E0B), modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("可能相关", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = Color(0xFFF59E0B))
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text("没有找到确定答案，但找到可能相关证据", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                    result.uncertaintyReason?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                }
+            if (result.status != QueryResultStatus.NOT_FOUND) {
+                Spacer(Modifier.height(10.dp))
+                Text(result.answer ?: "", style = MaterialTheme.typography.bodyLarge)
             }
-        }
-        QueryResultStatus.NOT_FOUND -> Box(
-            Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp))
-                .background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)).padding(18.dp)
-        ) {
-            Text("没有找到相关信息", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+            result.uncertaintyReason?.let { Spacer(Modifier.height(4.dp)); Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF6B7280)) }
         }
     }
 
     if (result.evidences.isNotEmpty()) {
         Spacer(Modifier.height(16.dp))
-        Text("证据", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+        Text("证据", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
-        LazyColumn { items(result.evidences) { ev ->
-            Card(
-                Modifier.fillMaxWidth().padding(vertical = 4.dp).shadow(2.dp, RoundedCornerShape(14.dp)),
-                colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-            ) {
-                Box(Modifier.background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(14.dp)).padding(14.dp)) {
-                    Row(verticalAlignment = Alignment.Top) {
-                        Icon(evidenceIcon(ev.type), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(10.dp))
-                        Column {
-                            Text(ev.content, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
-                            Text("置信: ${ev.confidence.name}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        LazyColumn {
+            itemsIndexed(result.evidences) { i, ev ->
+                StaggeredItem(i) {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 3.dp).shadow(2.dp, RoundedCornerShape(14.dp)).clip(RoundedCornerShape(14.dp)).background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(14.dp)).padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.Top) {
+                            Icon(evIcon(ev.type), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Column {
+                                Text(ev.content, style = MaterialTheme.typography.bodySmall)
+                                Text("置信: ${ev.confidence.name}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF6B7280))
+                            }
                         }
                     }
                 }
             }
-        } }
+        }
     }
 }

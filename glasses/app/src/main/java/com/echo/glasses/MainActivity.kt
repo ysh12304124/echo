@@ -4,9 +4,6 @@ import android.content.IntentFilter
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
-import android.view.Gravity
-import android.view.View
-import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.echo.glasses.receiver.KeyEventListener
@@ -105,20 +102,8 @@ class MainActivity : AppCompatActivity() {
             addAction(KeyType.TWO_FINGER_SWIPE_BACK.action)
         })
 
-        rotateForLens()
         render()
         Log.i(TAG, "Echo 眼镜端启动，已订阅 $CLIENT_KEY 并注册按键；默认场景=${scenes[selected].cmd}")
-    }
-
-    /** 选择界面整体逆时针旋转 90°，并交换宽高使其铺满镜片显示区域。 */
-    private fun rotateForLens() {
-        val root = findViewById<View>(R.id.root)
-        val dm = resources.displayMetrics
-        val w = dm.widthPixels
-        val h = dm.heightPixels
-        root.rotation = -90f
-        // 旋转 90° 后需交换宽高（旋转前宽=屏高、高=屏宽），并居中避免裁剪。
-        root.layoutParams = FrameLayout.LayoutParams(h, w, Gravity.CENTER)
     }
 
     override fun onDestroy() {

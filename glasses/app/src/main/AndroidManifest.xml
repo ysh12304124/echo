@@ -12,10 +12,11 @@
         android:theme="@style/Theme.EchoGlasses">
 
         <!-- LAUNCHER 使 Echo 出现在眼镜应用列表；会话由手机端 CXR-L appStart 主导拉起。 -->
+        <!-- 眼镜内置屏物理方向为竖屏 480x640，直接按原生竖屏渲染：人眼与录屏均为正向，无需再手动旋转。 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="landscape">
+            android:screenOrientation="portrait">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

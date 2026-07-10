@@ -10,46 +10,43 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// ── Dark tech palette (only dark — more immersive) ──
-private val DeepBackground = Color(0xFF080B12)
-private val SurfaceBg = Color(0xFF111827)
-private val CardBg = Color(0xFF1A2235)
-private val CardBgLighter = Color(0xFF1F2A3D)
-private val PrimaryBlue = Color(0xFF60A5FA)
-private val AccentCyan = Color(0xFF22D3EE)
-private val AccentGreen = Color(0xFF34D399)
-private val AccentPurple = Color(0xFFA78BFA)
-private val TextPrimary = Color(0xFFF1F5F9)
-private val TextSecondary = Color(0xFF94A3B8)
-private val BorderSubtle = Color(0xFF334155)
-private val BorderGlass = Color(0x20FFFFFF)
+// ── Light palette: white surfaces + blue accents ──
+private val White = Color(0xFFFFFFFF)
+private val SurfaceWhite = Color(0xFFF8F9FC)
+private val CardWhite = Color(0xFFF0F2F8)
+private val PrimaryBlue = Color(0xFF2563EB)
+private val AccentTeal = Color(0xFF0D9488)
+private val AccentAmber = Color(0xFFD97706)
+private val TextMain = Color(0xFF111827)
+private val TextSub = Color(0xFF6B7280)
+private val BorderSub = Color(0xFFE5E7EB)
+private val ShadowColor = Color(0x1A000000)
 
-private val EchoDarkScheme = darkColorScheme(
+private val EchoLightScheme = lightColorScheme(
     primary = PrimaryBlue,
-    onPrimary = Color(0xFF0A1628),
-    primaryContainer = Color(0xFF1E3A5F),
-    onPrimaryContainer = Color(0xFFD6E4FF),
-    secondary = AccentCyan,
-    onSecondary = Color(0xFF002020),
-    secondaryContainer = Color(0xFF003737),
-    onSecondaryContainer = Color(0xFFB8F5F5),
-    tertiary = AccentPurple,
-    onTertiary = Color(0xFF1B103E),
-    tertiaryContainer = Color(0xFF2E2360),
-    onTertiaryContainer = Color(0xFFE4DCFF),
-    surface = DeepBackground,
-    onSurface = TextPrimary,
-    surfaceVariant = SurfaceBg,
-    onSurfaceVariant = TextSecondary,
-    surfaceContainer = CardBg,
-    surfaceContainerHigh = CardBgLighter,
-    outline = BorderSubtle,
-    outlineVariant = Color(0xFF1E293B),
-    error = Color(0xFFFF6B6B),
-    onError = Color(0xFF2A0709),
+    onPrimary = White,
+    primaryContainer = Color(0xFFDBEAFE),
+    onPrimaryContainer = Color(0xFF1E3A5F),
+    secondary = AccentTeal,
+    onSecondary = White,
+    secondaryContainer = Color(0xFFCCFBF1),
+    onSecondaryContainer = Color(0xFF134E4A),
+    tertiary = AccentAmber,
+    onTertiary = White,
+    tertiaryContainer = Color(0xFFFEF3C7),
+    onTertiaryContainer = Color(0xFF78350F),
+    surface = White,
+    onSurface = TextMain,
+    surfaceVariant = SurfaceWhite,
+    onSurfaceVariant = TextSub,
+    surfaceContainer = CardWhite,
+    surfaceContainerHigh = Color(0xFFEBEDF3),
+    outline = BorderSub,
+    outlineVariant = Color(0xFFE5E7EB),
+    error = Color(0xFFDC2626),
+    onError = White,
 )
 
-// ── Shapes — more generous rounding ──
 private val EchoShapes = Shapes(
     extraSmall = RoundedCornerShape(6.dp),
     small = RoundedCornerShape(10.dp),
@@ -58,27 +55,20 @@ private val EchoShapes = Shapes(
     extraLarge = RoundedCornerShape(32.dp),
 )
 
-// ── Typography — refined hierarchy ──
 private val EchoTypography = Typography().run {
     val f = FontFamily.Default
     copy(
-        displayLarge = displayLarge.copy(fontFamily = f, fontWeight = FontWeight.Bold, color = TextPrimary),
         headlineLarge = headlineLarge.copy(fontFamily = f, fontWeight = FontWeight.Bold),
         headlineMedium = headlineMedium.copy(fontFamily = f, fontWeight = FontWeight.SemiBold, letterSpacing = 0.3.sp),
         titleLarge = titleLarge.copy(fontFamily = f, fontWeight = FontWeight.SemiBold),
-        titleMedium = titleMedium.copy(fontFamily = f, fontWeight = FontWeight.Medium, letterSpacing = 0.2.sp),
-        titleSmall = titleSmall.copy(fontFamily = f, fontWeight = FontWeight.Bold, letterSpacing = 0.1.sp),
+        titleMedium = titleMedium.copy(fontFamily = f, fontWeight = FontWeight.Medium),
+        titleSmall = titleSmall.copy(fontFamily = f, fontWeight = FontWeight.Bold),
         bodyLarge = bodyLarge.copy(fontFamily = f, letterSpacing = 0.2.sp),
-        bodyMedium = bodyMedium.copy(fontFamily = f, letterSpacing = 0.15.sp),
-        bodySmall = bodySmall.copy(fontFamily = f, letterSpacing = 0.12.sp),
-        labelLarge = labelLarge.copy(fontFamily = f, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp),
-        labelMedium = labelMedium.copy(fontFamily = f, fontWeight = FontWeight.Medium, letterSpacing = 1.0.sp),
-        labelSmall = labelSmall.copy(fontFamily = f, letterSpacing = 0.8.sp),
+        bodyMedium = bodyMedium.copy(fontFamily = f, letterSpacing = 0.1.sp),
+        bodySmall = bodySmall.copy(fontFamily = f, letterSpacing = 0.1.sp),
+        labelMedium = labelMedium.copy(fontFamily = f, fontWeight = FontWeight.Medium, letterSpacing = 0.8.sp),
+        labelSmall = labelSmall.copy(fontFamily = f, letterSpacing = 0.5.sp),
     )
-}
-
-object EchoTheme {
-    val cardBorder = BorderGlass
 }
 
 @Composable
@@ -87,7 +77,7 @@ fun EchoTheme(
     content: @Composable () -> Unit,
 ) {
     MaterialTheme(
-        colorScheme = EchoDarkScheme,
+        colorScheme = EchoLightScheme,
         typography = EchoTypography,
         shapes = EchoShapes,
         content = content,

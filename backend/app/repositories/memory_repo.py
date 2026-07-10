@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, desc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import (
@@ -200,6 +200,7 @@ class MemoryRepository:
             query = query.where(TimeMemoryORM.scene == scene.value)
         if status:
             query = query.where(TimeMemoryORM.status == status.value)
+        query = query.order_by(desc(TimeMemoryORM.started_at), desc(TimeMemoryORM.id))
         result = await self.db.execute(query)
         all_rows = result.scalars().all()
         total = len(all_rows)

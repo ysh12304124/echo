@@ -12,8 +12,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +36,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.echo.phone.EchoApplication
 import com.echo.phone.data.glasses.GlassesConnection
 import com.echo.phone.domain.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -49,16 +52,25 @@ class HomeViewModel(
         private set
     var error by mutableStateOf<String?>(null)
         private set
+    var isRefreshing by mutableStateOf(false)
+        private set
+
     val deviceStatus = glasses.deviceStatus.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DeviceStatus(false))
+
     init { refresh() }
+
     fun refresh() {
         viewModelScope.launch {
-            loading = true
+            isRefreshing = true
             try { memories = repo.listMemories(partitionFilter).sortedByDescending { it.startedAt }; error = null }
             catch (e: Exception) { error = e.message }
+            // 最小刷新动画时长 600ms，让用户感知到刷新
+            delay(600)
+            isRefreshing = false
             loading = false
         }
     }
+
     fun connectGlasses() {
         viewModelScope.launch {
             try { glasses.connect(); error = null }
@@ -97,6 +109,7 @@ private fun SkeletonCard() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     partitionFilter: DataPartition? = null, title: String = "识境 Echo",
@@ -109,6 +122,7 @@ fun HomeScreen(
         override fun <T : ViewModel> create(cls: Class<T>): T = HomeViewModel(app.repository, app.glassesConnection, partitionFilter) as T
     })
     val ds by vm.deviceStatus.collectAsState()
+    // 录制完成自动刷新
     LaunchedEffect(Unit) { app.recordingCompleted.collect { vm.refresh() } }
 
     val isRec = ds.isRecordingTime || ds.isRecordingSpace
@@ -119,7 +133,7 @@ fun HomeScreen(
         }
         Spacer(Modifier.height(12.dp))
 
-        // 设备状态 — 录制信息内嵌在卡片中，不重叠
+        // 设备状态 — 眼镜连接状态自动通过 StateFlow 刷新
         Box(Modifier.fillMaxWidth().shadow(8.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(GlassBgElevated).border(1.dp, GlassBorderElevated, RoundedCornerShape(18.dp)).padding(16.dp)) {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -128,7 +142,6 @@ fun HomeScreen(
                     Text(if (ds.connected) "眼镜已连接 · 电量 ${ds.batteryPercent}%" else "未连接", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                     if (!ds.connected) FilledTonalButton(onClick = { vm.connectGlasses() }, modifier = Modifier.height(34.dp)) { Text("连接") }
                 }
-                // 录制中 — 内嵌在 Column 中，在 Row 下方，不重叠
                 if (isRec) {
                     Spacer(Modifier.height(8.dp))
                     if (ds.isRecordingTime) Text("● 时间录制中", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
@@ -140,26 +153,32 @@ fun HomeScreen(
         Spacer(Modifier.height(24.dp))
         Text("最近记忆", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
 
-        AnimatedContent(
-            targetState = when { vm.loading -> "loading"; vm.memories.isEmpty() -> "empty"; vm.error != null -> "error"; else -> "list" },
-            transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(150)) },
-            label = "home",
-        ) { state ->
-            when (state) {
-                "loading" -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { repeat(3) { SkeletonCard() } }
-                "empty" -> Box(Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("⏳", style = MaterialTheme.typography.headlineLarge)
-                        Text("暂无记忆", style = MaterialTheme.typography.bodyLarge, color = Color(0xFF6B7280))
-                        Text("戴上眼镜，选择场景后开始记录", style = MaterialTheme.typography.bodySmall, color = Color(0xFF6B7280))
+        // 下拉刷新
+        PullToRefreshBox(
+            isRefreshing = vm.isRefreshing,
+            onRefresh = { vm.refresh() },
+        ) {
+            AnimatedContent(
+                targetState = when { vm.loading && !vm.isRefreshing -> "loading"; vm.memories.isEmpty() && !vm.isRefreshing -> "empty"; vm.error != null -> "error"; else -> "list" },
+                transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(150)) },
+                label = "home",
+            ) { state ->
+                when (state) {
+                    "loading" -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { repeat(3) { SkeletonCard() } }
+                    "empty" -> Box(Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("⏳", style = MaterialTheme.typography.headlineLarge)
+                            Text("暂无记忆", style = MaterialTheme.typography.bodyLarge, color = Color(0xFF6B7280))
+                            Text("戴上眼镜，选择场景后开始记录", style = MaterialTheme.typography.bodySmall, color = Color(0xFF6B7280))
+                        }
                     }
-                }
-                "error" -> Column {
-                    Text("加载失败: ${vm.error}", color = MaterialTheme.colorScheme.error)
-                    TextButton(onClick = { vm.refresh() }) { Text("重试") }
-                }
-                else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(vm.memories) { memory -> MemoryCard(memory) { onNavigateMemory(memory.memoryId) } }
+                    "error" -> Column {
+                        Text("加载失败: ${vm.error}", color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { vm.refresh() }) { Text("重试") }
+                    }
+                    else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(vm.memories) { memory -> MemoryCard(memory) { onNavigateMemory(memory.memoryId) } }
+                    }
                 }
             }
         }

@@ -175,7 +175,7 @@ class IngestPipeline:
 
         duration = int((datetime.now(timezone.utc) - _as_utc(session.created_at)).total_seconds())
         key_moments, evidence_entries = await self._build_key_frame_navigation(
-            memory.id, session.id, frame_paths, vision, duration
+            memory.id, session.id, frame_paths, duration
         )
 
         # 组织可读摘要：时间由 started_at/duration 体现，人物数量/空间/语音总结落到展示字段。
@@ -207,10 +207,9 @@ class IngestPipeline:
         memory_id: UUID,
         session_id: UUID,
         frame_paths: list[str],
-        vision,
         duration_seconds: int,
     ) -> tuple[list[dict], list[dict]]:
-        """Pick a few readable frames, describe them, and expose them as visual moments."""
+        """Expose a few evenly sampled frames as visual moments."""
         key_moments: list[dict] = []
         evidence_entries: list[dict] = []
         if not frame_paths:
@@ -218,15 +217,6 @@ class IngestPipeline:
 
         for order, index in enumerate(self._select_key_frame_indexes(len(frame_paths)), start=1):
             frame_path = frame_paths[index]
-            try:
-                result = await vision.analyze_frame(frame_path)
-            except Exception as e:
-                log.warning("关键帧分析失败 memory=%s frame=%s: %s", memory_id, frame_path, e)
-                continue
-            if not result.is_informative:
-                continue
-
-            description = (result.summary or "").strip() or "现场关键画面"
             media_key = self._frame_media_key(session_id, frame_path)
             timestamp_ms = self._estimate_frame_timestamp_ms(
                 index, len(frame_paths), duration_seconds
@@ -234,18 +224,18 @@ class IngestPipeline:
             ev = Evidence(
                 memory_id=memory_id,
                 type=EvidenceType.VISUAL,
-                content=description,
+                content="关键帧图片",
                 media_path=media_key,
                 timestamp_ms=timestamp_ms,
                 confidence=ConfidenceLevel.HIGH,
-                metadata={"labels": result.labels, "frame_index": index},
+                metadata={"frame_index": index},
             )
             await self.repo.save_evidence(ev)
             media_url = f"/api/v1/media/{media_key}"
             moment = {
                 "id": f"frame-{order}",
-                "label": description,
-                "description": description,
+                "label": "",
+                "description": "",
                 "time_offset_seconds": timestamp_ms // 1000,
                 "timeOffsetSeconds": timestamp_ms // 1000,
                 "image_url": media_url,
@@ -259,7 +249,7 @@ class IngestPipeline:
             evidence_entries.append(
                 {
                     "type": "visual",
-                    "label": description,
+                    "label": "",
                     "media_url": media_url,
                     "mediaUrl": media_url,
                     "timestamp_ms": timestamp_ms,
@@ -269,21 +259,18 @@ class IngestPipeline:
                     "confidence": ev.confidence.value,
                 }
             )
-            if len(key_moments) >= _KEY_FRAME_COUNT:
-                break
 
         return key_moments, evidence_entries
 
     def _select_key_frame_indexes(self, frame_count: int) -> list[int]:
         if frame_count <= 0:
             return []
-        candidate_count = min(frame_count, _KEY_FRAME_COUNT * 3)
-        if frame_count <= candidate_count:
+        selected_count = min(frame_count, _KEY_FRAME_COUNT)
+        if frame_count <= _KEY_FRAME_COUNT:
             return list(range(frame_count))
-        # Avoid the first/last frame where the camera is often being raised or lowered.
         return [
-            round((i + 1) * (frame_count - 1) / (candidate_count + 1))
-            for i in range(candidate_count)
+            round((i + 1) * (frame_count - 1) / (selected_count + 1))
+            for i in range(selected_count)
         ]
 
     def _frame_media_key(self, session_id: UUID, frame_path: str) -> str:

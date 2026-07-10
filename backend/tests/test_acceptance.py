@@ -101,7 +101,7 @@ async def test_case1_meeting_global_query(client: AsyncClient):
     nav = resp.json()["navigation_summary"]
     assert nav["key_moments"]
     moment = nav["key_moments"][0]
-    assert moment["description"]
+    assert moment["description"] == ""
     assert moment["image_url"].startswith("/api/v1/media/sessions/")
     assert moment["imageUrl"] == moment["image_url"]
 

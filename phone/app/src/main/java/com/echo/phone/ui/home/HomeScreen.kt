@@ -118,7 +118,7 @@ private fun Modifier.pressScale(): Modifier {
 // ── Staggered list item ──
 @Composable
 private fun StaggeredItem(index: Int, content: @Composable () -> Unit) {
-    val visible by remember { mutableStateOf(false) }
+    var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { delay(index * 60L); visible = true }
     AnimatedVisibility(visible, enter = fadeIn(tween(400)) + slideInVertically(tween(400, delayMillis = index * 30)) { it / 2 }) {
         content()
@@ -173,7 +173,7 @@ fun HomeScreen(
                 }
                 if (!ds.connected) FilledTonalButton(onClick = { vm.connectGlasses() }, modifier = Modifier.height(36.dp)) { Text("连接") }
             }
-            AnimatedVisibility(ds.isRecordingTime || ds.isRecordingSpace, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+            androidx.compose.animation.AnimatedVisibility(ds.isRecordingTime || ds.isRecordingSpace, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
                 Column(Modifier.padding(top = 10.dp)) {
                     if (ds.isRecordingTime) Text("● 时间录制中", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                     if (ds.isRecordingSpace) Text("◆ 空间采集中", style = MaterialTheme.typography.labelSmall, color = Color(0xFF10B981))

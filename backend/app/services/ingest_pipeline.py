@@ -33,6 +33,7 @@ log = get_logger("ingest")
 _AUDIO_SAMPLE_RATE = 16000
 _AUDIO_CHANNELS = 1
 _AUDIO_SAMPLE_WIDTH = 2
+_KEY_FRAME_COUNT = 3
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -81,12 +82,14 @@ class IngestPipeline:
             raise ValueError("Session not found")
 
         blob = self.providers.blob_store()
-        key = f"sessions/{session_id}/frames/{uuid4()}.jpg"
+        frame_id = uuid4()
+        filename = f"{frame_id}.jpg"
+        key = f"sessions/{session_id}/frames/{filename}"
         path = await blob.save(key, data, "image/jpeg")
 
         # 按接收顺序保存全部帧，确保 complete 时能取到「收到的第一张图片」。
         await self.repo.update_session_frames(session_id, path)
-        return UUID(key.split("/")[-1].replace(".jpg", "")), True, False
+        return frame_id, True, False
 
     async def upload_audio(self, session_id: UUID, data: bytes, timestamp_ms: int) -> UUID:
         session = await self.repo.get_session(session_id)
@@ -170,14 +173,21 @@ class IngestPipeline:
                 {"memory_id": str(memory.id), "partition": memory.partition.value, "type": "transcript"},
             )
 
+        duration = int((datetime.now(timezone.utc) - _as_utc(session.created_at)).total_seconds())
+        key_moments, evidence_entries = await self._build_key_frame_navigation(
+            memory.id, session.id, frame_paths, vision, duration
+        )
+
         # 组织可读摘要：时间由 started_at/duration 体现，人物数量/空间/语音总结落到展示字段。
         identify_brief = f"共{person_count}人 · 空间：{space or '未知'}｜{voice_summary or '无语音内容'}"
         nav_summary = NavigationSummary(
             persons=[f"{person_count}人"],
             topics=[space] if space else [],
+            spaces=[space] if space else [],
+            key_moments=key_moments,
+            evidence_entries=evidence_entries,
         )
 
-        duration = int((datetime.now(timezone.utc) - _as_utc(session.created_at)).total_seconds())
         memory = await self.repo.update_time_memory(
             memory.id,
             status=MemoryStatus.COMPLETED,
@@ -191,6 +201,94 @@ class IngestPipeline:
         await self.repo.link_session_memory(session.id, memory.id, MemoryStatus.COMPLETED)
         log.info("时间记忆已保存 memory=%s duration=%ds", memory.id, duration)
         return memory
+
+    async def _build_key_frame_navigation(
+        self,
+        memory_id: UUID,
+        session_id: UUID,
+        frame_paths: list[str],
+        vision,
+        duration_seconds: int,
+    ) -> tuple[list[dict], list[dict]]:
+        """Pick a few readable frames, describe them, and expose them as visual moments."""
+        key_moments: list[dict] = []
+        evidence_entries: list[dict] = []
+        if not frame_paths:
+            return key_moments, evidence_entries
+
+        for order, index in enumerate(self._select_key_frame_indexes(len(frame_paths)), start=1):
+            frame_path = frame_paths[index]
+            try:
+                result = await vision.analyze_frame(frame_path)
+            except Exception as e:
+                log.warning("关键帧分析失败 memory=%s frame=%s: %s", memory_id, frame_path, e)
+                continue
+            if not result.is_informative:
+                continue
+
+            description = (result.summary or "").strip() or "现场关键画面"
+            media_key = self._frame_media_key(session_id, frame_path)
+            timestamp_ms = self._estimate_frame_timestamp_ms(
+                index, len(frame_paths), duration_seconds
+            )
+            ev = Evidence(
+                memory_id=memory_id,
+                type=EvidenceType.VISUAL,
+                content=description,
+                media_path=media_key,
+                timestamp_ms=timestamp_ms,
+                confidence=ConfidenceLevel.HIGH,
+                metadata={"labels": result.labels, "frame_index": index},
+            )
+            await self.repo.save_evidence(ev)
+            media_url = f"/api/v1/media/{media_key}"
+            moment = {
+                "id": f"frame-{order}",
+                "label": description,
+                "description": description,
+                "time_offset_seconds": timestamp_ms // 1000,
+                "image_url": media_url,
+                "evidence_id": str(ev.id),
+                "type": "visual",
+                "confidence": ev.confidence.value,
+            }
+            key_moments.append(moment)
+            evidence_entries.append(
+                {
+                    "type": "visual",
+                    "label": description,
+                    "media_url": media_url,
+                    "timestamp_ms": timestamp_ms,
+                    "evidence_id": str(ev.id),
+                    "confidence": ev.confidence.value,
+                }
+            )
+            if len(key_moments) >= _KEY_FRAME_COUNT:
+                break
+
+        return key_moments, evidence_entries
+
+    def _select_key_frame_indexes(self, frame_count: int) -> list[int]:
+        if frame_count <= 0:
+            return []
+        candidate_count = min(frame_count, _KEY_FRAME_COUNT * 3)
+        if frame_count <= candidate_count:
+            return list(range(frame_count))
+        # Avoid the first/last frame where the camera is often being raised or lowered.
+        return [
+            round((i + 1) * (frame_count - 1) / (candidate_count + 1))
+            for i in range(candidate_count)
+        ]
+
+    def _frame_media_key(self, session_id: UUID, frame_path: str) -> str:
+        return f"sessions/{session_id}/frames/{Path(frame_path).name}"
+
+    def _estimate_frame_timestamp_ms(
+        self, frame_index: int, frame_count: int, duration_seconds: int
+    ) -> int:
+        if frame_count <= 1 or duration_seconds <= 0:
+            return 0
+        return int((frame_index / (frame_count - 1)) * duration_seconds * 1000)
 
     async def _transcribe_all_audio(self, asr, audio_paths: list[str]) -> str:
         """把所有 PCM 音频块合并成一段 WAV，只调用一次 ASR，返回全量转写文本。"""

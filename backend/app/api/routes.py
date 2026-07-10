@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import PurePosixPath
 from typing import Optional
 from uuid import UUID
 
@@ -17,6 +18,8 @@ from app.repositories.memory_repo import MemoryRepository
 from app.schemas import (
     BindingListResponse,
     BindingResponse,
+    FrameImageListResponse,
+    FrameImageResponse,
     CreateSessionRequest,
     EntityListResponse,
     EntitySummaryResponse,
@@ -54,6 +57,28 @@ log = get_logger("api")
 
 def get_repo(db: AsyncSession = Depends(get_db)) -> MemoryRepository:
     return MemoryRepository(db)
+
+
+_FRAME_EXTENSIONS = {".jpg", ".jpeg"}
+
+
+def _validate_frame_filename(filename: str) -> str:
+    path = PurePosixPath(filename)
+    if filename != path.name or "\\" in filename:
+        raise HTTPException(400, "Invalid frame filename")
+    if path.suffix.lower() not in _FRAME_EXTENSIONS:
+        raise HTTPException(400, "Frame filename must be a jpg image")
+    return filename
+
+
+def _session_frame_key(session_id: UUID, filename: str) -> str:
+    filename = _validate_frame_filename(filename)
+    return f"sessions/{session_id}/frames/{filename}"
+
+
+def _session_frame_url(session_id: UUID, filename: str) -> str:
+    filename = _validate_frame_filename(filename)
+    return f"/api/v1/ingest/sessions/{session_id}/frames/{filename}"
 
 
 # --- Ingest ---
@@ -115,7 +140,43 @@ async def upload_frame(
         accepted,
         filtered,
     )
-    return UploadAckResponse(id=frame_id, accepted=accepted, filtered=filtered)
+    filename = f"{frame_id}.jpg"
+    return UploadAckResponse(
+        id=frame_id,
+        accepted=accepted,
+        filtered=filtered,
+        filename=filename,
+        media_url=_session_frame_url(session_id, filename),
+    )
+
+
+@router.get("/ingest/sessions/{session_id}/frames", response_model=FrameImageListResponse)
+async def list_session_frames(
+    session_id: UUID,
+    repo: MemoryRepository = Depends(get_repo),
+):
+    session = await repo.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    frame_paths, _ = await repo.get_session_media_paths(session_id)
+    items = [
+        FrameImageResponse(
+            filename=PurePosixPath(path).name,
+            media_url=_session_frame_url(session_id, PurePosixPath(path).name),
+        )
+        for path in frame_paths
+    ]
+    return FrameImageListResponse(session_id=session_id, items=items, total=len(items))
+
+
+@router.get("/ingest/sessions/{session_id}/frames/{filename}")
+async def get_session_frame(session_id: UUID, filename: str):
+    key = _session_frame_key(session_id, filename)
+    blob = get_provider_factory().blob_store()
+    path = await blob.get_path(key)
+    if not path:
+        raise HTTPException(404, "Frame not found")
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @router.post("/ingest/sessions/{session_id}/audio", response_model=UploadAckResponse, status_code=201)

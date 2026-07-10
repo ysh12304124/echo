@@ -198,22 +198,34 @@ class InMemoryVectorStore(VectorStore):
 
 class LocalBlobStore(BlobStore):
   def __init__(self, base_path: str):
-    self.base_path = Path(base_path)
+    self.base_path = Path(base_path).resolve()
     self.base_path.mkdir(parents=True, exist_ok=True)
 
+  def _resolve_key(self, key: str) -> Optional[Path]:
+    path = (self.base_path / key).resolve()
+    try:
+      path.relative_to(self.base_path)
+    except ValueError:
+      return None
+    return path
+
   async def save(self, key: str, data: bytes, content_type: str) -> str:
-    path = self.base_path / key
+    path = self._resolve_key(key)
+    if path is None:
+      raise ValueError("Invalid blob key")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     return str(path)
 
   async def get_path(self, key: str) -> Optional[str]:
-    path = self.base_path / key
+    path = self._resolve_key(key)
+    if path is None:
+      return None
     return str(path) if path.exists() else None
 
   async def delete(self, key: str) -> None:
-    path = self.base_path / key
-    if path.exists():
+    path = self._resolve_key(key)
+    if path and path.exists():
       path.unlink()
 
   def get_url(self, key: str) -> str:

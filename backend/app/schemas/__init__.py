@@ -56,6 +56,19 @@ class UploadAckResponse(BaseModel):
     id: UUID
     accepted: bool
     filtered: bool = False
+    filename: Optional[str] = None
+    media_url: Optional[str] = None
+
+
+class FrameImageResponse(BaseModel):
+    filename: str
+    media_url: str
+
+
+class FrameImageListResponse(BaseModel):
+    session_id: UUID
+    items: list[FrameImageResponse] = Field(default_factory=list)
+    total: int
 
 
 class MemorySummaryResponse(BaseModel):

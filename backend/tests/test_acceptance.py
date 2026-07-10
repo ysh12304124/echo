@@ -51,6 +51,45 @@ async def _create_and_complete_meeting(client: AsyncClient, title: str = "Q3经�
     return resp.json()
 
 
+@pytest.mark.asyncio
+async def test_session_frame_image_hosting(client: AsyncClient):
+    resp = await client.post("/api/v1/ingest/sessions", json={
+        "memory_type": "time",
+        "scene": "meeting",
+        "partition": "work",
+        "title": "关键帧图床测试",
+    })
+    assert resp.status_code == 201
+    session_id = resp.json()["session_id"]
+
+    image_bytes = b"\xff\xd8 key frame bytes \xff\xd9"
+    resp = await client.post(
+        f"/api/v1/ingest/sessions/{session_id}/frames",
+        files={"file": ("whiteboard.jpg", io.BytesIO(image_bytes), "image/jpeg")},
+        data={"timestamp_ms": 5000, "is_key_moment": "true"},
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["filename"].endswith(".jpg")
+    assert data["media_url"] == f"/api/v1/ingest/sessions/{session_id}/frames/{data['filename']}"
+
+    resp = await client.get(data["media_url"])
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("image/jpeg")
+    assert resp.content == image_bytes
+
+    resp = await client.get(f"/api/v1/ingest/sessions/{session_id}/frames")
+    assert resp.status_code == 200
+    frame_list = resp.json()
+    assert frame_list["total"] == 1
+    assert frame_list["items"][0]["filename"] == data["filename"]
+    assert frame_list["items"][0]["media_url"] == data["media_url"]
+
+    resp = await client.get(f"/api/v1/media/sessions/{session_id}/frames/{data['filename']}")
+    assert resp.status_code == 200
+    assert resp.content == image_bytes
+
+
 # 用例1: 会议记录与全局工作查询
 @pytest.mark.asyncio
 async def test_case1_meeting_global_query(client: AsyncClient):

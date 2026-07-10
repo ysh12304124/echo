@@ -71,7 +71,7 @@ fun MineScreen(
 
 @Composable
 private fun FadeInItem(index: Int, content: @Composable () -> Unit) {
-    val visible by remember { mutableStateOf(false) }
+    var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { delay(index * 80L); visible = true }
     AnimatedVisibility(visible, enter = fadeIn(tween(500)) + slideInVertically(tween(500)) { it / 3 }) { content() }
 }

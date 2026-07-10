@@ -62,7 +62,7 @@ private val GlassBorder = Color(0xFFE2E4EA)
 // ── Staggered evidence items ──
 @Composable
 private fun StaggeredItem(index: Int, content: @Composable () -> Unit) {
-    val visible by remember { mutableStateOf(false) }
+    var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { delay(index * 50L); visible = true }
     AnimatedVisibility(visible, enter = fadeIn(tween(400)) + slideInVertically(tween(400)) { it / 3 }) { content() }
 }

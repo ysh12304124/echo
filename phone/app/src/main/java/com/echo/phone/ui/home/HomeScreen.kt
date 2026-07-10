@@ -9,7 +9,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -198,10 +197,17 @@ fun HomeScreen(
                     }
                     "error" -> Column { Text("加载失败: ${vm.error}", color = MaterialTheme.colorScheme.error); TextButton(onClick = { vm.refresh() }) { Text("重试") } }
                     else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                        itemsIndexed(vm.memories) { i, memory ->
-                            val isFirst = i == 0
-                            TimelineItem(i, vm.memories.size, vm.revealNew && isFirst) {
-                                MemoryCard(memory) { onNavigateMemory(memory.memoryId) }
+                        var lastDate = ""
+                        vm.memories.forEachIndexed { i, memory ->
+                            val thisDate = memory.startedAt?.substring(0, 10) ?: ""
+                            val isNewDate = thisDate.isNotEmpty() && thisDate != lastDate
+                            if (isNewDate) lastDate = thisDate
+                            item(key = memory.memoryId) {
+                                if (isNewDate) TimelineDateLabel(thisDate)
+                                val isFirst = i == 0
+                                TimelineItem(i, vm.memories.size, vm.revealNew && isFirst, isNewDate && isFirst) {
+                                    MemoryCard(memory) { onNavigateMemory(memory.memoryId) }
+                                }
                             }
                         }
                     }
@@ -213,14 +219,14 @@ fun HomeScreen(
 
 // ── 时间轴节点 + 揭晓动画 ──
 @Composable
-private fun TimelineItem(index: Int, total: Int, reveal: Boolean, content: @Composable () -> Unit) {
+private fun TimelineItem(index: Int, total: Int, reveal: Boolean, isDateHead: Boolean, content: @Composable () -> Unit) {
     val isFirst = index == 0
     val isLast = index == total - 1
     Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
         // 时间轴线
         Box(Modifier.width(24.dp).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
             // 上方连线
-            if (!isFirst) {
+            if (!isFirst && !isDateHead) {
                 Box(Modifier.width(2.dp).height(12.dp).background(TimelineGray))
             }
             Spacer(Modifier.height(12.dp))
@@ -239,6 +245,13 @@ private fun TimelineItem(index: Int, total: Int, reveal: Boolean, content: @Comp
                 enter = if (reveal) expandVertically(spring(dampingRatio = 0.6f, stiffness = 300f)) + fadeIn(tween(300)) else fadeIn(tween(200)),
             ) { content() }
         }
+    }
+}
+
+@Composable
+private fun TimelineDateLabel(date: String) {
+    Row(Modifier.fillMaxWidth().padding(start = 24.dp).padding(top = 16.dp, bottom = 4.dp)) {
+        Text(date, style = MaterialTheme.typography.labelMedium, color = Color(0xFF9CA3AF), fontWeight = FontWeight.Medium)
     }
 }
 

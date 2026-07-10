@@ -325,6 +325,7 @@ async def get_memory(memory_id: UUID, repo: MemoryRepository = Depends(get_repo)
         evidence_status=memory.evidence_status,
         is_favorited=memory.is_favorited,
         is_locked=memory.is_locked,
+        key_frames=_format_key_frames(memory.key_frames or []),
     )
 
 
@@ -644,3 +645,14 @@ async def export_query_result(
         raise HTTPException(404, "Query not found")
     from uuid import uuid4
     return ExportResultResponse(export_id=uuid4(), content=log)
+
+def _format_key_frames(raw: list) -> list:
+    result = []
+    for kf in raw:
+        mp = kf.get('media_path', '')
+        if mp.startswith('sessions/'):
+            parts = mp.split('/')  # ['sessions','{id}','frames','{name}']
+            if len(parts) >= 4:
+                kf['media_url'] = f'/api/v1/ingest/sessions/{parts[1]}/frames/{parts[3]}'
+        result.append(kf)
+    return result

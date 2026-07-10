@@ -116,6 +116,7 @@ class TimeMemoryDetailResponse(BaseModel):
     evidence_status: str = "pending"
     is_favorited: bool = False
     is_locked: bool = False
+    key_frames: list = []
 
     @field_serializer("started_at", "ended_at")
     def _format_time_fields(self, value: Optional[datetime]) -> Optional[str]:

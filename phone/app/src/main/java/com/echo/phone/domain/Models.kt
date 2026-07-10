@@ -47,6 +47,7 @@ data class TimeMemoryDetail(
     val evidenceStatus: String,
     val isFavorited: Boolean,
     val isLocked: Boolean = false,
+    val keyFrames: List<KeyFrame> = emptyList(),
     val durationSeconds: Int,
     val startedAt: String? = null,
 )
@@ -61,6 +62,7 @@ data class SpaceMemoryDetail(
     val identifyBrief: String,
     val isFavorited: Boolean,
     val isLocked: Boolean = false,
+    val keyFrames: List<KeyFrame> = emptyList(),
     val anchors: List<SpaceAnchor> = emptyList(),
 )
 
@@ -151,3 +153,6 @@ data class GlassCommand(
     val type: GlassCommandType,
     val scene: TimeScene? = null,
 )
+
+
+data class KeyFrame(val mediaUrl: String = "", val filename: String = "", val frameIndex: Int = 0, val timestampMs: Long = 0)

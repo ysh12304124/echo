@@ -247,8 +247,11 @@ class IngestPipeline:
                 "label": description,
                 "description": description,
                 "time_offset_seconds": timestamp_ms // 1000,
+                "timeOffsetSeconds": timestamp_ms // 1000,
                 "image_url": media_url,
+                "imageUrl": media_url,
                 "evidence_id": str(ev.id),
+                "evidenceId": str(ev.id),
                 "type": "visual",
                 "confidence": ev.confidence.value,
             }
@@ -258,8 +261,11 @@ class IngestPipeline:
                     "type": "visual",
                     "label": description,
                     "media_url": media_url,
+                    "mediaUrl": media_url,
                     "timestamp_ms": timestamp_ms,
+                    "timestampMs": timestamp_ms,
                     "evidence_id": str(ev.id),
+                    "evidenceId": str(ev.id),
                     "confidence": ev.confidence.value,
                 }
             )

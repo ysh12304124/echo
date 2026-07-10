@@ -96,6 +96,15 @@ async def test_case1_meeting_global_query(client: AsyncClient):
     memory = await _create_and_complete_meeting(client)
     memory_id = memory["memory_id"]
 
+    resp = await client.get(f"/api/v1/memories/{memory_id}")
+    assert resp.status_code == 200
+    nav = resp.json()["navigation_summary"]
+    assert nav["key_moments"]
+    moment = nav["key_moments"][0]
+    assert moment["description"]
+    assert moment["image_url"].startswith("/api/v1/media/sessions/")
+    assert moment["imageUrl"] == moment["image_url"]
+
     resp = await client.post("/api/v1/query", json={
         "question": "张经理承诺了什么？",
         "scope": "global_work",

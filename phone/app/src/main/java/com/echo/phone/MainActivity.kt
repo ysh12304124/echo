@@ -19,7 +19,7 @@ class MainActivity : ComponentActivity() {
             if (conn is CxrGlassesConnection) conn.attachActivity(this)
         }
         setContent {
-            EchoTheme {
+            EchoTheme(darkTheme = false) {
                 Surface {
                     EchoApp()
                 }

@@ -33,7 +33,7 @@ log = get_logger("ingest")
 _AUDIO_SAMPLE_RATE = 16000
 _AUDIO_CHANNELS = 1
 _AUDIO_SAMPLE_WIDTH = 2
-_KEY_FRAME_COUNT = 3
+_KEY_FRAME_COUNT = 999
 
 
 def _as_utc(value: datetime) -> datetime:

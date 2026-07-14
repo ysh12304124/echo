@@ -60,6 +60,7 @@ data class SpaceMemoryDetail(
     val status: MemoryStatus,
     val quality: String?,
     val modelUrl: String?,
+    val modelFormat: String? = null,
     val identifyBrief: String,
     val isFavorited: Boolean,
     val isLocked: Boolean = false,

@@ -22,6 +22,7 @@ import com.echo.phone.EchoApplication
 import com.echo.phone.data.EchoRepository
 import com.echo.phone.domain.*
 import com.echo.phone.ui.common.PointCloudViewer
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class SpaceDetailViewModel(
@@ -47,10 +48,28 @@ class SpaceDetailViewModel(
                 space = s
                 isFavorited = s.isFavorited
                 modelAbsoluteUrl = repo.absoluteMediaUrl(s.modelUrl)
+                if (s.status == MemoryStatus.PROCESSING) refreshUntilReady()
             } catch (e: Exception) {
                 error = e.message
             }
             loading = false
+        }
+    }
+
+    private fun refreshUntilReady() {
+        viewModelScope.launch {
+            repeat(60) {
+                delay(5000)
+                try {
+                    val current = repo.getSpace(spaceId)
+                    space = current
+                    modelAbsoluteUrl = repo.absoluteMediaUrl(current.modelUrl)
+                    if (current.status != MemoryStatus.PROCESSING) return@launch
+                } catch (e: Exception) {
+                    error = e.message
+                    return@launch
+                }
+            }
         }
     }
 
@@ -151,8 +170,37 @@ fun SpaceDetailScreen(spaceId: String, onBack: () -> Unit) {
 
                 Text("3D 空间模型", style = MaterialTheme.typography.titleMedium)
                 
-                Card(Modifier.fillMaxWidth().height(360.dp)) {
-                    PointCloudViewer(vm.modelAbsoluteUrl, Modifier.fillMaxSize())
+                when {
+                    space.status == MemoryStatus.PROCESSING -> {
+                        Card(Modifier.fillMaxWidth().height(180.dp)) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    CircularProgressIndicator()
+                                    Spacer(Modifier.height(12.dp))
+                                    Text("正在进行 3DGS 重建，请稍候")
+                                }
+                            }
+                        }
+                    }
+                    space.status == MemoryStatus.FAILED -> {
+                        Card(Modifier.fillMaxWidth().height(180.dp)) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("3DGS 重建失败，请重新录制", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                    space.status == MemoryStatus.COMPLETED && vm.modelAbsoluteUrl != null -> {
+                        Card(Modifier.fillMaxWidth().height(360.dp)) {
+                            PointCloudViewer(vm.modelAbsoluteUrl, Modifier.fillMaxSize())
+                        }
+                    }
+                    else -> {
+                        Card(Modifier.fillMaxWidth().height(180.dp)) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("暂无可用的 3D 模型")
+                            }
+                        }
+                    }
                 }
 
                 Spacer(Modifier.height(16.dp))

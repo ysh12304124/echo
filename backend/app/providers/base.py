@@ -67,6 +67,10 @@ class VisionProvider(ABC):
         """
         return {}
 
+    async def describe_scene(self, image_path: str) -> str:
+        """用 VLM 分析单张图片，返回一句话场景描述。默认空。"""
+        return ""
+
 
 class OCRProvider(ABC):
     @abstractmethod

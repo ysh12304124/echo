@@ -49,6 +49,9 @@ class MockASRProvider(ASRProvider):
 
 
 class MockVisionProvider(VisionProvider):
+  async def describe_scene(self, image_path: str) -> str:
+    return "室内场景 — 包含桌椅与办公设备"
+
   async def analyze_frame(self, image_path: str) -> VisionResult:
     name = Path(image_path).stem
     if "whiteboard" in name.lower():

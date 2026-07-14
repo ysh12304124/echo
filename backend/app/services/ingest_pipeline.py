@@ -309,6 +309,16 @@ class IngestPipeline:
             for s in result.anchor_suggestions
         ]
 
+        # VLM 场景描述
+        scene_desc = ""
+        if frame_paths:
+            try:
+                vision = self.providers.vision()
+                scene_desc = await vision.describe_scene(frame_paths[0])
+                log.info("空间记忆场景描述 memory=%s desc=%r", session.id, scene_desc)
+            except Exception as e:
+                log.warning("场景描述生成失败: %s", e)
+
         memory = SpaceMemory(
             partition=session.partition,
             status=MemoryStatus.COMPLETED if quality != SpaceQuality.RETRY_REQUIRED else MemoryStatus.FAILED,
@@ -316,7 +326,7 @@ class IngestPipeline:
             model_url=result.model_url,
             anchors=anchors,
             captured_at=datetime.now(timezone.utc),
-            identify_brief=session.title or "空间采集",
+            identify_brief=scene_desc or session.title or "空间采集",
             model_format=model_format,
             loop_angle=loop.angle_degrees,
             session_id=session.id,

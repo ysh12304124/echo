@@ -4,6 +4,7 @@ import com.echo.phone.domain.*
 import com.echo.phone.domain.KeyFrame
 import okhttp3.MultipartBody
 import okhttp3.RequestBody
+import retrofit2.Response
 import retrofit2.http.*
 
 interface EchoApiService {
@@ -52,7 +53,7 @@ interface EchoApiService {
     ): TimeMemoryDetailDto
 
     @DELETE("memories/{memoryId}")
-    suspend fun deleteMemory(@Path("memoryId") memoryId: String)
+    suspend fun deleteMemory(@Path("memoryId") memoryId: String): Response<Unit>
 
     @GET("spaces")
     suspend fun listSpaces(@Query("partition") partition: String? = null): SpaceListDto
@@ -67,7 +68,7 @@ interface EchoApiService {
     ): SpaceMemoryDetailDto
 
     @DELETE("spaces/{spaceId}")
-    suspend fun deleteSpace(@Path("spaceId") spaceId: String)
+    suspend fun deleteSpace(@Path("spaceId") spaceId: String): Response<Unit>
 
     @GET("memories/{memoryId}/bindings")
     suspend fun listMemoryBindings(@Path("memoryId") memoryId: String): BindingListDto

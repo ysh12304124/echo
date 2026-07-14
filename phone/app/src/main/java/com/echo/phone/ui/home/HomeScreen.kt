@@ -63,15 +63,16 @@ class HomeViewModel(
     private val partitionFilter: DataPartition? = null,
 ) : ViewModel() {
     var memories by mutableStateOf<List<MemorySummary>>(emptyList())
-        private set
     var loading by mutableStateOf(true)
-        private set
+        
     var error by mutableStateOf<String?>(null)
-        private set
+        
     var isRefreshing by mutableStateOf(false)
-        private set
+        
     var revealNew by mutableStateOf(false)
-        private set
+    var animatingDeleteId by mutableStateOf<String?>(null)
+    var pendingDeleteId by mutableStateOf<String?>(null)  
+        
 
     val deviceStatus = glasses.deviceStatus.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DeviceStatus(false))
     init { refresh() }
@@ -128,7 +129,10 @@ class HomeViewModel(
                 } else {
                     repo.deleteMemory(memoryId)
                 }
+                animatingDeleteId = memoryId
+                delay(400)
                 memories = memories.filter { it.memoryId != memoryId }
+                animatingDeleteId = null
             } catch (e: Exception) { error = e.message }
         }
     }
@@ -208,6 +212,7 @@ fun HomeScreen(
     // 录制完成 → 带揭晓动画的刷新
     LaunchedEffect(Unit) {
         app.recordingCompleted.collect { vm.refreshWithReveal() }
+        app.deletedMemoryId.collect { id -> vm.pendingDeleteId = id }
     }
 
     val recType by app.currentRecordingType.collectAsState()
@@ -216,6 +221,15 @@ fun HomeScreen(
     // 录制开始 → 震动
     LaunchedEffect(isRec) {
         if (isRec) view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+    }
+
+    LaunchedEffect(vm.pendingDeleteId) {
+        val id = vm.pendingDeleteId ?: return@LaunchedEffect
+        vm.animatingDeleteId = id
+        delay(400)
+        vm.memories = vm.memories.filter { it.memoryId != id }
+        vm.animatingDeleteId = null
+        vm.pendingDeleteId = null
     }
 
     // 空间记忆场景选择对话框
@@ -276,7 +290,7 @@ fun HomeScreen(
 
         PullToRefreshBox(isRefreshing = vm.isRefreshing, onRefresh = { vm.refresh() }) {
             AnimatedContent(
-                targetState = when { vm.loading && !vm.isRefreshing -> "loading"; vm.memories.isEmpty() && !vm.isRefreshing -> "empty"; vm.error != null -> "error"; else -> "list" },
+                targetState = when { vm.loading && !vm.isRefreshing -> "loading"; displayMemories.isEmpty() && !vm.isRefreshing -> "empty"; vm.error != null -> "error"; else -> "list" },
                 transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(150)) },
                 label = "home",
             ) { state ->
@@ -291,14 +305,21 @@ fun HomeScreen(
                     "error" -> Column { Text("加载失败: ${vm.error}", color = MaterialTheme.colorScheme.error); TextButton(onClick = { vm.refresh() }) { Text("重试") } }
                     else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(0.dp)) {
                         var lastDate = ""
-                        vm.memories.forEachIndexed { i, memory ->
+                        displayMemories.forEachIndexed { i, memory ->
                             val thisDate = memory.startedAt?.substring(0, 10) ?: ""
                             val isNewDate = thisDate.isNotEmpty() && thisDate != lastDate
                             if (isNewDate) lastDate = thisDate
                             item(key = memory.memoryId) {
                                 if (isNewDate) TimelineDateLabel(thisDate)
                                 val isFirst = i == 0
-                                TimelineItem(i, vm.memories.size, vm.revealNew && isFirst, isNewDate && isFirst) {
+                                TimelineItem(i, displayMemories.size, false, isNewDate && isFirst) {
+                                    val isDeleting = vm.animatingDeleteId == memory.memoryId
+                                    val isReveal = vm.revealNew && i == 0
+                                    androidx.compose.animation.AnimatedVisibility(
+                                        visible = !isDeleting,
+                                        enter = if (isReveal) expandVertically(spring(dampingRatio = 0.6f, stiffness = 300f)) + fadeIn(tween(300)) else fadeIn(tween(400)) + scaleIn(tween(400)),
+                                        exit = fadeOut(tween(400)) + scaleOut(targetScale = 0.9f, animationSpec = tween(400))
+                                    ) {
                                     MemoryCard(
                                 memory = memory,
                                 onClick = {
@@ -308,6 +329,7 @@ fun HomeScreen(
                                 onFavorite = { vm.toggleFavorite(memory.memoryId) },
                                 onDelete = { vm.deleteMemory(memory.memoryId) }
                             )
+                            }
                                 }
                             }
                         }
@@ -341,10 +363,7 @@ private fun TimelineItem(index: Int, total: Int, reveal: Boolean, isDateHead: Bo
         Spacer(Modifier.width(8.dp))
         // 卡片内容 — 揭晓动画
         Box(Modifier.weight(1f).padding(vertical = 6.dp)) {
-            androidx.compose.animation.AnimatedVisibility(
-                visible = true,
-                enter = if (reveal) expandVertically(spring(dampingRatio = 0.6f, stiffness = 300f)) + fadeIn(tween(300)) else fadeIn(tween(200)),
-            ) { content() }
+            content()
         }
     }
 }
@@ -375,7 +394,6 @@ private fun MemoryCard(
                 Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp).weight(1f)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text(memory.title.ifEmpty { memory.identifyBrief }.ifEmpty { "未命名记忆" }, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                        if (memory.isFavorited) Icon(Icons.Default.Star, null, tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp))
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(

@@ -205,7 +205,7 @@ fun SpaceDetailScreen(spaceId: String, onBack: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteDialog = false
-                    vm.delete(onBack)
+                    app.notifyMemoryDeleted(spaceId); vm.delete(onBack)
                 }) { Text("删除") }
             },
             dismissButton = {

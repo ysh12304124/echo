@@ -44,6 +44,12 @@ class EchoApplication : Application() {
 
     private val _recordingCompleted = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
     val recordingCompleted: SharedFlow<Unit> = _recordingCompleted.asSharedFlow()
+    private val _deletedMemoryId = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val deletedMemoryId: SharedFlow<String> = _deletedMemoryId.asSharedFlow()
+    fun notifyMemoryDeleted(memoryId: String) { _deletedMemoryId.tryEmit(memoryId) }
+    private val _homeRefreshRequested = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
+    val homeRefreshRequested: SharedFlow<Unit> = _homeRefreshRequested.asSharedFlow()
+    fun requestHomeRefresh() { _homeRefreshRequested.tryEmit(Unit) }
 
     // Space recording: phone needs to pick scene type before starting
     private val _pendingSpaceStart = MutableSharedFlow<Pair<GlassCommand, (SpaceType) -> Unit>>(extraBufferCapacity = 1)

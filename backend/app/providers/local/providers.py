@@ -200,8 +200,20 @@ class LocalVLMProvider(VisionProvider, OCRProvider):
 
     async def describe_scene(self, image_path: str) -> str:
         """用 VLM 描述场景"""
+        data_url = encode_image_data_url(image_path)
         prompt = "请用一句简短的中文描述这张照片中的场景，例如'客厅里的沙发和电视'或'办公室里的会议桌'。只返回描述本身，不超过30个字。"
-        return await self.summarize("", prompt)
+        content = await self.client.chat(
+            self.model,
+            [
+                {"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ]},
+            ],
+            temperature=0.3,
+            max_tokens=60,
+        )
+        return content.strip()[:100]
 
     async def summarize_session(self, transcript: str, image_path: str | None) -> dict:
         """全量转写 + 首帧图片 → 人物数量 / 所在空间 / 语音内容总结。"""

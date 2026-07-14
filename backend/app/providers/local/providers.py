@@ -195,14 +195,13 @@ class LocalVLMProvider(VisionProvider, OCRProvider):
         return VisionResult(summary=content.strip()[:200], is_informative=True)
 
     async def should_keep_frame(self, image_path: str) -> bool:
-        
+        result = await self.analyze_frame(image_path)
+        return result.is_informative
+
     async def describe_scene(self, image_path: str) -> str:
         """用 VLM 描述场景"""
         prompt = "请用一句简短的中文描述这张照片中的场景，例如'客厅里的沙发和电视'或'办公室里的会议桌'。只返回描述本身，不超过30个字。"
         return await self.summarize("", prompt)
-
-    result = await self.analyze_frame(image_path)
-        return result.is_informative
 
     async def summarize_session(self, transcript: str, image_path: str | None) -> dict:
         """全量转写 + 首帧图片 → 人物数量 / 所在空间 / 语音内容总结。"""

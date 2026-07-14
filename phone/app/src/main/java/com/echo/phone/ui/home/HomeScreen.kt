@@ -199,7 +199,10 @@ fun HomeScreen(
         override fun <T : ViewModel> create(cls: Class<T>): T = HomeViewModel(app.repository, app.glassesConnection, partitionFilter) as T
     })
     val ds by vm.deviceStatus.collectAsState()
-    val displayMemories = if (favoritesOnly) vm.memories.filter { it.isFavorited } else vm.memories
+    val rawMemories = vm.memories
+    val displayMemories = remember(rawMemories, favoritesOnly) {
+        if (favoritesOnly) rawMemories.filter { it.isFavorited } else rawMemories
+    }
     val view = LocalView.current
 
     // 录制完成 → 带揭晓动画的刷新
@@ -368,17 +371,11 @@ private fun MemoryCard(
     ) {
         Box(Modifier.background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp))) {
             Row {
-                Box(Modifier.width(3.dp).fillMaxHeight().defaultMinSize(minHeight = 88.dp).clip(RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp)).background(accent.copy(alpha = 0.6f)))
-                Column(Modifier.padding(16.dp).weight(1f)) {
+                Box(Modifier.width(3.dp).fillMaxHeight().defaultMinSize(minHeight = 72.dp).clip(RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp)).background(accent.copy(alpha = 0.6f)))
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp).weight(1f)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text(memory.title.ifEmpty { memory.identifyBrief }.ifEmpty { "未命名记忆" }, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         if (memory.isFavorited) Icon(Icons.Default.Star, null, tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp))
-                        if (showActions && onDelete != null) {
-                            IconButton(
-                                onClick = onDelete,
-                                modifier = Modifier.size(20.dp)
-                            ) { Icon(Icons.Default.Close, "删除", tint = Color(0xFF9CA3AF), modifier = Modifier.size(14.dp)) }
-                        }
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
@@ -394,23 +391,13 @@ private fun MemoryCard(
                         Text(memory.identifyBrief, style = MaterialTheme.typography.bodyMedium, maxLines = 2, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f))
                     }
                     if (showActions && onFavorite != null) {
-                        Spacer(Modifier.height(4.dp))
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            TextButton(
-                                onClick = onFavorite,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                            ) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = onFavorite, modifier = Modifier.size(28.dp)) {
                                 Icon(
                                     if (memory.isFavorited) Icons.Default.Star else Icons.Default.StarBorder,
-                                    null,
+                                    "收藏",
                                     tint = if (memory.isFavorited) Color(0xFFF59E0B) else Color(0xFF9CA3AF),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    if (memory.isFavorited) "已收藏" else "收藏",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (memory.isFavorited) Color(0xFFF59E0B) else Color(0xFF9CA3AF)
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                         }

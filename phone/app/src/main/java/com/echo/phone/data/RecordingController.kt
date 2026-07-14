@@ -6,6 +6,7 @@ import com.echo.phone.domain.*
 import com.echo.phone.util.EchoLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -27,6 +28,8 @@ class RecordingController(
     private val qualityAnalyzer = PhotoQualityAnalyzer()
     private var lastImuSample: ImuSample? = null
     private var poseLoopDetector: PoseLoopDetector? = null
+    private val imuBatchLock = Any()
+    private val pendingImuBatch = mutableListOf<ImuSample>()
 
     private val pendingUploads = AtomicInteger(0)
 
@@ -116,22 +119,31 @@ class RecordingController(
     private fun collectImu() {
         val id = sessionId ?: return
         imuJob = scope.launch {
-            val batch = mutableListOf<ImuSample>()
             glasses.imuFlow.collect { imu ->
                 lastImuSample = imu
                 poseLoopDetector?.updateImu(imu)
-                batch.add(imu)
-                if (batch.size >= 25) {
-                    val chunk = batch.toList()
-                    batch.clear()
-                    try { repo.uploadImuBatch(id, chunk) }
-                    catch (e: Exception) { EchoLog.e("IMU 批上传失败 session=$id: ${e.message}", e) }
+                val chunk = synchronized(imuBatchLock) {
+                    pendingImuBatch += imu
+                    if (pendingImuBatch.size >= 25) {
+                        pendingImuBatch.toList().also { pendingImuBatch.clear() }
+                    } else {
+                        null
+                    }
                 }
+                if (chunk != null) scope.launch { uploadImuBatch(id, chunk) }
             }
-            if (batch.isNotEmpty()) {
-                try { repo.uploadImuBatch(id, batch.toList()) }
-                catch (e: Exception) { EchoLog.e("IMU 尾部批上传失败 session=$id: ${e.message}", e) }
-            }
+        }
+    }
+
+    private suspend fun uploadImuBatch(id: String, samples: List<ImuSample>) {
+        pendingUploads.incrementAndGet()
+        try {
+            repo.uploadImuBatch(id, samples)
+            EchoLog.i("IMU 批上传成功 session=$id count=${samples.size}")
+        } catch (e: Exception) {
+            EchoLog.e("IMU 批上传失败 session=$id: ${e.message}", e)
+        } finally {
+            pendingUploads.decrementAndGet()
         }
     }
 
@@ -161,6 +173,12 @@ class RecordingController(
         val id = sessionId ?: throw IllegalStateException("没有进行中的录制")
         glasses.stopRecording(memoryType)
         if (memoryType == MemoryType.TIME) phoneMic.stop()
+        imuJob?.cancelAndJoin()
+        imuJob = null
+        val tailImu = synchronized(imuBatchLock) {
+            pendingImuBatch.toList().also { pendingImuBatch.clear() }
+        }
+        if (tailImu.isNotEmpty()) uploadImuBatch(id, tailImu)
         withTimeoutOrNull(UPLOAD_DRAIN_TIMEOUT_MS) {
             delay(400)
             while (pendingUploads.get() > 0) delay(50)
@@ -172,10 +190,9 @@ class RecordingController(
             EchoLog.i("剩余音视频已全部上传完成，开始结束会话 session=$id")
         }
         qualityJob?.cancel(); qualityJob?.join()
-        imuJob?.cancel(); imuJob?.join()
         frameJob?.cancel(); frameJob?.join()
         audioJob?.cancel(); audioJob?.join()
-        qualityJob = null; imuJob = null; frameJob = null; audioJob = null
+        qualityJob = null; frameJob = null; audioJob = null
         poseLoopDetector?.reset()
         poseLoopDetector = null
         val summary = repo.completeSession(id)

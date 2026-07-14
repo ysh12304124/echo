@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Optional
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.providers.base import (
@@ -56,17 +57,50 @@ class Settings(BaseSettings):
     # 3D 重建服务（可选，未配置则用 mock 关键帧分析）
     reconstruction_base_url: Optional[str] = None
 
-    fastgs_ssh_host: Optional[str] = None
-    fastgs_ssh_port: int = 22
-    fastgs_ssh_user: Optional[str] = None
-    fastgs_ssh_password: Optional[str] = None
-    fastgs_remote_project: str = "/home/liangjiahua/FastGS"
-    fastgs_remote_env: str = "fastgs"
-    fastgs_remote_work_root: str = "/tmp/echo-fastgs"
-    fastgs_train_iterations: int = 30000
-    fastgs_train_timeout_seconds: int = 1800
-    fastgs_python_executable: str = "/home/liangjiahua/miniconda3/envs/fastgs/bin/python"
-    fastgs_conda_executable: str = "/home/liangjiahua/miniconda3/bin/conda"
+    fastgs_ssh_host: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("FASTGS_SSH_HOST", "ECHO_FASTGS_SSH_HOST"),
+    )
+    fastgs_ssh_port: int = Field(
+        default=22,
+        validation_alias=AliasChoices("FASTGS_SSH_PORT", "ECHO_FASTGS_SSH_PORT"),
+    )
+    fastgs_ssh_user: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("FASTGS_SSH_USER", "ECHO_FASTGS_SSH_USER"),
+    )
+    fastgs_ssh_password: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("FASTGS_SSH_PASSWORD", "ECHO_FASTGS_SSH_PASSWORD"),
+    )
+    fastgs_remote_project: str = Field(
+        default="/home/liangjiahua/FastGS",
+        validation_alias=AliasChoices("FASTGS_REMOTE_PROJECT", "ECHO_FASTGS_REMOTE_PROJECT"),
+    )
+    fastgs_remote_env: str = Field(
+        default="fastgs",
+        validation_alias=AliasChoices("FASTGS_REMOTE_ENV", "ECHO_FASTGS_REMOTE_ENV"),
+    )
+    fastgs_remote_work_root: str = Field(
+        default="/tmp/echo-fastgs",
+        validation_alias=AliasChoices("FASTGS_REMOTE_WORK_ROOT", "ECHO_FASTGS_REMOTE_WORK_ROOT"),
+    )
+    fastgs_train_iterations: int = Field(
+        default=30000,
+        validation_alias=AliasChoices("FASTGS_TRAIN_ITERATIONS", "ECHO_FASTGS_TRAIN_ITERATIONS"),
+    )
+    fastgs_train_timeout_seconds: int = Field(
+        default=1800,
+        validation_alias=AliasChoices("FASTGS_TRAIN_TIMEOUT_SECONDS", "ECHO_FASTGS_TRAIN_TIMEOUT_SECONDS"),
+    )
+    fastgs_python_executable: str = Field(
+        default="/home/liangjiahua/miniconda3/envs/fastgs/bin/python",
+        validation_alias=AliasChoices("FASTGS_PYTHON_EXECUTABLE", "ECHO_FASTGS_PYTHON_EXECUTABLE"),
+    )
+    fastgs_conda_executable: str = Field(
+        default="/home/liangjiahua/miniconda3/bin/conda",
+        validation_alias=AliasChoices("FASTGS_CONDA_EXECUTABLE", "ECHO_FASTGS_CONDA_EXECUTABLE"),
+    )
 
 
 @lru_cache

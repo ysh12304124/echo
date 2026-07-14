@@ -44,7 +44,7 @@ import kotlinx.coroutines.launch
 fun SpaceMemoryDetail.toMemorySummary() = MemorySummary(
     memoryId = spaceId,
     memoryType = MemoryType.SPACE,
-    status = MemoryStatus.COMPLETED,
+    status = if (modelUrl.isNullOrBlank() || modelUrl.contains("placeholder")) MemoryStatus.PROCESSING else MemoryStatus.COMPLETED,
     identifyBrief = identifyBrief,
     title = title.ifBlank { "空间记忆" },
     scene = null,

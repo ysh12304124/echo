@@ -58,7 +58,12 @@ fun PointCloudViewer(pointCloudUrl: String?, modifier: Modifier = Modifier) {
 
     val html = "<!DOCTYPE html><html><body style='margin:0;background:#000;overflow:hidden;'>" +
         "<canvas id='c' style='width:100%;height:100%;touch-action:none;'></canvas>" +
-        "<div id='s' style='position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#aaa;font:14px sans-serif;z-index:10;pointer-events:none;'>Loading GS...</div>" +
+        "<div id='loading' style='position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10;pointer-events:none;text-align:center;'>" +
+        "<div id='loadingText' style='color:#aaa;font:14px sans-serif;margin-bottom:10px;'>Loading GS...</div>" +
+        "<div style='width:200px;height:4px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;margin:0 auto;'>" +
+        "<div id='loadingBar' style='width:0%;height:100%;background:rgba(255,255,255,0.5);border-radius:2px;transition:width 0.3s;'></div>" +
+        "</div>" +
+        "</div>" +
         "<script>" +
         "var W=window.innerWidth,H=window.innerHeight,D=devicePixelRatio||2;" +
         "var PLY=" + plyJs + ";" +
@@ -68,7 +73,9 @@ fun PointCloudViewer(pointCloudUrl: String?, modifier: Modifier = Modifier) {
         "(function(){" +
         "var canvas=document.getElementById('c');" +
         "canvas.width=W*Math.min(D,2);canvas.height=H*Math.min(D,2);" +
-        "var statusEl=document.getElementById('s');" +
+        "var loadingEl=document.getElementById('loading');" +
+        "var loadingText=document.getElementById('loadingText');" +
+        "var loadingBar=document.getElementById('loadingBar');" +
 
         // orbit camera
         "var theta=0,phi=Math.PI/3,radius=3;" +
@@ -117,7 +124,7 @@ fun PointCloudViewer(pointCloudUrl: String?, modifier: Modifier = Modifier) {
         "};" +
 
         // PlayCanvas setup
-        "if(typeof pc==='undefined'){statusEl.textContent='PlayCanvas not loaded';return;}" +
+        "if(typeof pc==='undefined'){loadingText.textContent='PlayCanvas not loaded';return;}" +
         "pc.createGraphicsDevice(canvas,{deviceTypes:[],antialias:false,depth:true,stencil:false,preserveDrawingBuffer:true,powerPreference:'high-performance'}).then(function(device){" +
         "  var ao=new pc.AppOptions();ao.graphicsDevice=device;" +
         "  ao.componentSystems=[pc.CameraComponentSystem,pc.LightComponentSystem,pc.RenderComponentSystem,pc.GSplatComponentSystem,pc.ScriptComponentSystem];" +
@@ -126,19 +133,19 @@ fun PointCloudViewer(pointCloudUrl: String?, modifier: Modifier = Modifier) {
         "  var light=new pc.Entity('light');light.setEulerAngles(35,45,0);light.addComponent('light',{color:new pc.Color(1,0.98,0.96),intensity:1});app.root.addChild(light);" +
         "  camEnt=new pc.Entity('camera');camEnt.addComponent('camera',{clearColor:new pc.Color(0.067,0.067,0.2),nearClip:0.0001,farClip:10000});app.root.addChild(camEnt);" +
         "  app.start();app.autoRender=true;" +
-        "  if(!PLY||PLY==='null'){statusEl.textContent='No PLY';applyCam();}else{" +
+        "  if(!PLY||PLY==='null'){loadingText.textContent='Processing...';loadingBar.style.width='30%';applyCam();}else{" +
         "    var asset=new pc.Asset('splat','gsplat',{url:PLY,filename:'model.ply'});" +
-        "    asset.on('progress',function(rcv,len){statusEl.textContent='Loading... '+Math.round(rcv/Math.max(1,len)*100)+'%';});" +
+        "    asset.on('progress',function(rcv,len){var pct=Math.round(rcv/Math.max(1,len)*100);loadingText.textContent='Loading... '+pct+'%';loadingBar.style.width=pct+'%';});" +
         "    asset.on('load',function(){" +
         "      var ent=new pc.Entity('gsplat');ent.addComponent('gsplat',{asset:asset,unified:true});app.root.addChild(ent);" +
         "      try{var r=asset.resource;if(r&&r.splat){var s=r.splat;tx=s.centerX||0;ty=s.centerY||0;tz=s.centerZ||0;var hx=s.halfExtentsX||1,hy=s.halfExtentsY||1,hz=s.halfExtentsZ||1;var sz=Math.sqrt(hx*hx+hy*hy+hz*hz)*2;radius=Math.max(0.1,sz*0.8);}}catch(e){}" +
         "      initTheta=theta;initPhi=phi;initRadius=radius;initTx=tx;initTy=ty;initTz=tz;" +
-        "      applyCam();statusEl.style.display='none';" +
+        "      applyCam();loadingEl.style.display='none';" +
         "    });" +
-        "    asset.on('error',function(err){statusEl.textContent='GS failed: '+err;});" +
+        "    asset.on('error',function(err){loadingText.textContent='GS failed: '+err;loadingBar.style.width='100%';loadingBar.style.background='rgba(255,100,100,0.6)';});" +
         "    app.assets.add(asset);app.assets.load(asset);" +
         "  }" +
-        "}).catch(function(err){statusEl.textContent='Device error: '+err.message;});" +
+        "}).catch(function(err){loadingText.textContent='Device error: '+err.message;});" +
         "})();" +
         "</script></body></html>"
 

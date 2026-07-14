@@ -58,9 +58,9 @@ fun PointCloudViewer(pointCloudUrl: String?, modifier: Modifier = Modifier) {
 
     val html = "<!DOCTYPE html><html><body style='margin:0;background:#000;overflow:hidden;'>" +
         "<canvas id='c' style='width:100%;height:100%;touch-action:none;'></canvas>" +
-        "<div id='loading' style='position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10;pointer-events:none;text-align:center;'>" +
+        "<div id='loading' style='position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10;pointer-events:none;text-align:center;'>" +
         "<div id='loadingText' style='color:#aaa;font:14px sans-serif;margin-bottom:10px;'>Loading GS...</div>" +
-        "<div style='width:200px;height:4px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;margin:0 auto;'>" +
+        "<div id='loadingBarWrap' style='width:200px;height:4px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;margin:0 auto;'>" +
         "<div id='loadingBar' style='width:0%;height:100%;background:rgba(255,255,255,0.5);border-radius:2px;transition:width 0.3s;'></div>" +
         "</div>" +
         "</div>" +
@@ -76,6 +76,7 @@ fun PointCloudViewer(pointCloudUrl: String?, modifier: Modifier = Modifier) {
         "var loadingEl=document.getElementById('loading');" +
         "var loadingText=document.getElementById('loadingText');" +
         "var loadingBar=document.getElementById('loadingBar');" +
+        "var loadingBarWrap=document.getElementById('loadingBarWrap');" +
 
         // orbit camera
         "var theta=0,phi=Math.PI/3,radius=3;" +
@@ -133,7 +134,7 @@ fun PointCloudViewer(pointCloudUrl: String?, modifier: Modifier = Modifier) {
         "  var light=new pc.Entity('light');light.setEulerAngles(35,45,0);light.addComponent('light',{color:new pc.Color(1,0.98,0.96),intensity:1});app.root.addChild(light);" +
         "  camEnt=new pc.Entity('camera');camEnt.addComponent('camera',{clearColor:new pc.Color(0.067,0.067,0.2),nearClip:0.0001,farClip:10000});app.root.addChild(camEnt);" +
         "  app.start();app.autoRender=true;" +
-        "  if(!PLY||PLY==='null'){loadingText.textContent='Processing...';loadingBar.style.width='30%';applyCam();}else{" +
+        "  if(!PLY||PLY==='null'){loadingText.textContent='Processing...';loadingBarWrap.style.display='none';applyCam();}else{" +
         "    var asset=new pc.Asset('splat','gsplat',{url:PLY,filename:'model.ply'});" +
         "    asset.on('progress',function(rcv,len){var pct=Math.round(rcv/Math.max(1,len)*100);loadingText.textContent='Loading... '+pct+'%';loadingBar.style.width=pct+'%';});" +
         "    asset.on('load',function(){" +

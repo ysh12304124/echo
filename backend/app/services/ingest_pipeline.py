@@ -113,9 +113,93 @@ class IngestPipeline:
 
         if session.memory_type == MemoryType.TIME:
             return await self._process_time_session(session, frame_paths, audio_paths)
-        else:
-            imu_samples = await self.repo.list_imu_samples(session_id)
-            return await self._process_space_session(session, frame_paths, imu_samples)
+        return await self._create_processing_space_memory(session, frame_paths)
+
+    async def _create_processing_space_memory(
+        self, session: IngestSession, frame_paths: list[str]
+    ) -> SpaceMemory:
+        """Persist the space record before the long-running remote job starts."""
+        existing = await self.repo.get_space_memory(session.memory_id) if session.memory_id else None
+        if existing:
+            return existing
+
+        imu_samples = await self.repo.list_imu_samples(session.id)
+        loop = detect_loop(imu_samples)
+        memory = SpaceMemory(
+            partition=session.partition,
+            status=MemoryStatus.PROCESSING,
+            quality=SpaceQuality.GOOD,
+            captured_at=datetime.now(timezone.utc),
+            identify_brief=session.title or "空间采集，正在重建",
+            loop_angle=loop.angle_degrees,
+            session_id=session.id,
+            title=session.title or "空间记忆",
+        )
+        await self.repo.create_space_memory(memory)
+        await self.repo.link_session_memory(session.id, memory.id, MemoryStatus.PROCESSING)
+        log.info(
+            "空间重建任务已创建 session=%s memory=%s frames=%d loop_angle=%.2f",
+            session.id, memory.id, len(frame_paths), loop.angle_degrees,
+        )
+        return memory
+
+    async def run_space_reconstruction(
+        self, memory_id: UUID, session_id: UUID, frame_paths: list[str]
+    ) -> SpaceMemory:
+        """Run remote FastGS and update the already-created space record."""
+        memory = await self.repo.get_space_memory(memory_id)
+        if not memory:
+            raise ValueError("Space memory not found")
+        from app.services.remote_reconstruction import RemoteReconstructionService
+
+        try:
+            service = RemoteReconstructionService()
+            if service.is_configured():
+                artifact = await service.reconstruct(
+                    session_id=session_id,
+                    space_id=memory_id,
+                    frame_paths=frame_paths,
+                    blob_store=self.providers.blob_store(),
+                )
+            else:
+                # Keep offline/mock development usable until remote FastGS settings exist.
+                result = await self.providers.reconstruction().reconstruct(frame_paths)
+                model_format = Path(result.model_url).suffix.lower().lstrip(".") or None
+                updated = await self.repo.update_space_memory(
+                    memory_id,
+                    status=MemoryStatus.COMPLETED,
+                    quality=SpaceQuality.GOOD,
+                    model_url=result.model_url,
+                    model_format=model_format,
+                    identify_brief="空间重建完成（mock）",
+                )
+                await self.repo.link_session_memory(session_id, memory_id, MemoryStatus.COMPLETED)
+                return updated
+            updated = await self.repo.update_space_memory(
+                memory_id,
+                status=MemoryStatus.COMPLETED,
+                quality=SpaceQuality.GOOD,
+                model_url=artifact.model_url,
+                model_format=artifact.model_format,
+                identify_brief="空间重建完成",
+            )
+            await self.repo.link_session_memory(session_id, memory_id, MemoryStatus.COMPLETED)
+            log.info(
+                "空间重建完成 session=%s memory=%s job=%s model=%s size=%d sha256=%s",
+                session_id, memory_id, artifact.job_id, artifact.model_url,
+                artifact.size_bytes, artifact.sha256,
+            )
+            return updated
+        except Exception as exc:
+            await self.repo.update_space_memory(
+                memory_id,
+                status=MemoryStatus.FAILED,
+                quality=SpaceQuality.RETRY_REQUIRED,
+                identify_brief="空间重建失败，请重新录制",
+            )
+            await self.repo.link_session_memory(session_id, memory_id, MemoryStatus.FAILED)
+            log.exception("空间重建失败 session=%s memory=%s: %s", session_id, memory_id, exc)
+            return await self.repo.get_space_memory(memory_id)
 
     async def _process_time_session(
         self, session: IngestSession, frame_paths: list[str], audio_paths: list[str]

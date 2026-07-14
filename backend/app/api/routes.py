@@ -5,6 +5,8 @@ from pathlib import PurePosixPath
 from typing import Optional
 from uuid import UUID
 
+import asyncio
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -13,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.enums import BindingType, DataPartition, MemoryStatus, MemoryType, TimeScene
 from app.domain.models import ImuSample, NavigationSummary, SpaceMemory, TimeMemory
 from app.providers import get_provider_factory
-from app.repositories.database import get_db
+from app.repositories.database import async_session_factory, get_db
 from app.repositories.memory_repo import MemoryRepository
 from app.schemas import (
     BindingListResponse,
@@ -57,6 +59,34 @@ class ExportQueryRequest(BaseModel):
 
 router = APIRouter()
 log = get_logger("api")
+_SPACE_RECONSTRUCTION_TASKS: dict[UUID, asyncio.Task] = {}
+
+
+async def _run_space_reconstruction_background(
+    session_id: UUID, memory_id: UUID, frame_paths: list[str]
+) -> None:
+    async with async_session_factory() as db:
+        pipeline = IngestPipeline(MemoryRepository(db))
+        await pipeline.run_space_reconstruction(memory_id, session_id, frame_paths)
+
+
+def _schedule_space_reconstruction(
+    session_id: UUID, memory_id: UUID, frame_paths: list[str]
+) -> None:
+    task = _SPACE_RECONSTRUCTION_TASKS.get(memory_id)
+    if task and not task.done():
+        return
+    task = asyncio.create_task(
+        _run_space_reconstruction_background(session_id, memory_id, frame_paths)
+    )
+    _SPACE_RECONSTRUCTION_TASKS[memory_id] = task
+
+    def _clear(done: asyncio.Task) -> None:
+        _SPACE_RECONSTRUCTION_TASKS.pop(memory_id, None)
+        if not done.cancelled() and done.exception():
+            log.exception("空间后台重建任务异常 memory=%s", memory_id, exc_info=done.exception())
+
+    task.add_done_callback(_clear)
 
 
 def get_repo(db: AsyncSession = Depends(get_db)) -> MemoryRepository:
@@ -237,11 +267,24 @@ async def upload_audio(
 
 
 @router.post("/ingest/sessions/{session_id}/complete", response_model=MemorySummaryResponse)
-async def complete_session(session_id: UUID, repo: MemoryRepository = Depends(get_repo)):
+async def complete_session(
+    session_id: UUID,
+    repo: MemoryRepository = Depends(get_repo),
+):
     pipeline = IngestPipeline(repo)
     log.info("会话结束，开始处理 session=%s", session_id)
     try:
+        session = await repo.get_session(session_id)
+        if not session:
+            raise ValueError("Session not found")
+        frame_paths, _ = await repo.get_session_media_paths(session_id)
         memory = await pipeline.complete_session(session_id)
+        if isinstance(memory, SpaceMemory) and memory.status == MemoryStatus.PROCESSING:
+            _schedule_space_reconstruction(
+                session_id,
+                memory.id,
+                frame_paths,
+            )
     except ValueError as e:
         log.warning("会话处理失败 session=%s: %s", session_id, e)
         raise HTTPException(404, str(e))

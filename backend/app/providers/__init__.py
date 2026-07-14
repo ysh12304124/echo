@@ -56,6 +56,18 @@ class Settings(BaseSettings):
     # 3D 重建服务（可选，未配置则用 mock 关键帧分析）
     reconstruction_base_url: Optional[str] = None
 
+    fastgs_ssh_host: Optional[str] = None
+    fastgs_ssh_port: int = 22
+    fastgs_ssh_user: Optional[str] = None
+    fastgs_ssh_password: Optional[str] = None
+    fastgs_remote_project: str = "/home/liangjiahua/FastGS"
+    fastgs_remote_env: str = "fastgs"
+    fastgs_remote_work_root: str = "/tmp/echo-fastgs"
+    fastgs_train_iterations: int = 30000
+    fastgs_train_timeout_seconds: int = 1800
+    fastgs_python_executable: str = "/home/liangjiahua/miniconda3/envs/fastgs/bin/python"
+    fastgs_conda_executable: str = "/home/liangjiahua/miniconda3/bin/conda"
+
 
 @lru_cache
 def get_settings() -> Settings:

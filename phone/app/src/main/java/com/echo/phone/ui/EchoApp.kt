@@ -106,6 +106,7 @@ fun EchoApp() {
                     onNavigateDevice = { navController.navigate(Routes.DEVICE) },
                     onNavigateStorage = { navController.navigate(Routes.STORAGE) },
                     onNavigateHelp = { navController.navigate(Routes.HELP) },
+                    onNavigateFavorites = { navController.navigate(Routes.FAVORITES) },
                 )
             }
             composable(Routes.MEMORY_DETAIL, arguments = listOf(navArgument("memoryId") { type = NavType.StringType })) { entry ->
@@ -125,6 +126,9 @@ fun EchoApp() {
             composable(Routes.HELP) { HelpScreen(onBack = { navController.popBackStack() }) }
             composable(Routes.QUALITY_TIME) {
                 HomeScreen(partitionFilter = DataPartition.QUALITY_TIME, title = "Quality Time", onNavigateMemory = { id -> navController.navigate(Routes.memoryDetail(id)) }, onNavigateSpace = { id -> navController.navigate(Routes.spaceDetail(id)) })
+            }
+            composable(Routes.FAVORITES) {
+                HomeScreen(favoritesOnly = true, title = "收藏", onNavigateMemory = { id -> navController.navigate(Routes.memoryDetail(id)) }, onNavigateSpace = { id -> navController.navigate(Routes.spaceDetail(id)) })
             }
         }
     }

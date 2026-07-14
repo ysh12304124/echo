@@ -12,7 +12,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
@@ -102,6 +104,35 @@ class HomeViewModel(
         }
     }
 
+    fun toggleFavorite(memoryId: String) {
+        viewModelScope.launch {
+            try {
+                val mem = memories.find { it.memoryId == memoryId } ?: return@launch
+                val newFav = !mem.isFavorited
+                if (mem.memoryType == MemoryType.SPACE) {
+                    repo.toggleSpaceFavorite(memoryId, newFav)
+                } else {
+                    repo.toggleFavorite(memoryId, newFav)
+                }
+                memories = memories.map { if (it.memoryId == memoryId) it.copy(isFavorited = newFav) else it }
+            } catch (e: Exception) { error = e.message }
+        }
+    }
+
+    fun deleteMemory(memoryId: String) {
+        viewModelScope.launch {
+            try {
+                val mem = memories.find { it.memoryId == memoryId } ?: return@launch
+                if (mem.memoryType == MemoryType.SPACE) {
+                    repo.deleteSpace(memoryId)
+                } else {
+                    repo.deleteMemory(memoryId)
+                }
+                memories = memories.filter { it.memoryId != memoryId }
+            } catch (e: Exception) { error = e.message }
+        }
+    }
+
     fun connectGlasses() {
         viewModelScope.launch {
             try { glasses.connect(); error = null }
@@ -155,8 +186,11 @@ private fun SkeletonCard() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
-    partitionFilter: DataPartition? = null, title: String = "识境 Echo",
-    onNavigateMemory: (String) -> Unit, onNavigateSpace: (String) -> Unit,
+    partitionFilter: DataPartition? = null,
+    favoritesOnly: Boolean = false,
+    title: String = "识境 Echo",
+    onNavigateMemory: (String) -> Unit,
+    onNavigateSpace: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as EchoApplication
@@ -165,6 +199,7 @@ fun HomeScreen(
         override fun <T : ViewModel> create(cls: Class<T>): T = HomeViewModel(app.repository, app.glassesConnection, partitionFilter) as T
     })
     val ds by vm.deviceStatus.collectAsState()
+    val displayMemories = if (favoritesOnly) vm.memories.filter { it.isFavorited } else vm.memories
     val view = LocalView.current
 
     // 录制完成 → 带揭晓动画的刷新
@@ -261,10 +296,15 @@ fun HomeScreen(
                                 if (isNewDate) TimelineDateLabel(thisDate)
                                 val isFirst = i == 0
                                 TimelineItem(i, vm.memories.size, vm.revealNew && isFirst, isNewDate && isFirst) {
-                                    MemoryCard(memory) {
+                                    MemoryCard(
+                                memory = memory,
+                                onClick = {
                             if (memory.memoryType == MemoryType.SPACE) onNavigateSpace(memory.memoryId)
                             else onNavigateMemory(memory.memoryId)
-                        }
+                        },
+                                onFavorite = { vm.toggleFavorite(memory.memoryId) },
+                                onDelete = { vm.deleteMemory(memory.memoryId) }
+                            )
                                 }
                             }
                         }
@@ -314,7 +354,13 @@ private fun TimelineDateLabel(date: String) {
 }
 
 @Composable
-private fun MemoryCard(memory: MemorySummary, onClick: () -> Unit) {
+private fun MemoryCard(
+    memory: MemorySummary,
+    onClick: () -> Unit,
+    onFavorite: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
+    showActions: Boolean = true,
+) {
     val accent = if (memory.memoryType == MemoryType.SPACE) Color(0xFFF59E0B) else sceneAccent(memory.scene)
     Card(
         Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).clickable { onClick() },
@@ -327,6 +373,12 @@ private fun MemoryCard(memory: MemorySummary, onClick: () -> Unit) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text(memory.title.ifEmpty { memory.identifyBrief }.ifEmpty { "未命名记忆" }, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         if (memory.isFavorited) Icon(Icons.Default.Star, null, tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp))
+                        if (showActions && onDelete != null) {
+                            IconButton(
+                                onClick = onDelete,
+                                modifier = Modifier.size(20.dp)
+                            ) { Icon(Icons.Default.Close, "删除", tint = Color(0xFF9CA3AF), modifier = Modifier.size(14.dp)) }
+                        }
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
@@ -340,6 +392,28 @@ private fun MemoryCard(memory: MemorySummary, onClick: () -> Unit) {
                     if (memory.identifyBrief.isNotEmpty()) {
                         Spacer(Modifier.height(8.dp))
                         Text(memory.identifyBrief, style = MaterialTheme.typography.bodyMedium, maxLines = 2, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f))
+                    }
+                    if (showActions && onFavorite != null) {
+                        Spacer(Modifier.height(4.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(
+                                onClick = onFavorite,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            ) {
+                                Icon(
+                                    if (memory.isFavorited) Icons.Default.Star else Icons.Default.StarBorder,
+                                    null,
+                                    tint = if (memory.isFavorited) Color(0xFFF59E0B) else Color(0xFF9CA3AF),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    if (memory.isFavorited) "已收藏" else "收藏",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (memory.isFavorited) Color(0xFFF59E0B) else Color(0xFF9CA3AF)
+                                )
+                            }
+                        }
                     }
                 }
             }

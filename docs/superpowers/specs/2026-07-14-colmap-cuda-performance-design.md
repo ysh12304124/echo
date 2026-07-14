@@ -34,12 +34,29 @@
 
 构建目录和源码放在 /home/liangjiahua/，避免继续占用根分区。旧版 COLMAP 保留作为回退路径。
 
+### 实测结果（2026-07-14）
+
+使用 130 主机上的 250 张 `huiyi` 图片，通过现有异步远程重建服务上传到 200 主机，使用 CUDA 版 COLMAP 和 1000 次 FastGS 训练迭代验证链路：
+
+| 阶段 | 耗时 |
+| --- | ---: |
+| COLMAP 总计 | 256.062 秒（约 4 分 16 秒） |
+| FastGS 1000 次训练 | 29.425 秒 |
+| 250 张图注册 | 250/250 |
+| COLMAP points3D | 20,643 |
+
+COLMAP 和 FastGS 均成功完成，生成 44,236 个顶点的二进制高斯 PLY，大小 10,972,058 字节。PLY 回传到 130 后 SHA256 保持为 `55dd88ebc9ce8cd6bf297960c550afd781caa993599c6bef97da7edab6f9a919`。
+
+本次日志还确认：特征提取和顺序匹配使用 RTX 3090 GPU；Mapper 收到 GPU 参数，但当前系统 Ceres 未编译 CUDA，因此 Bundle Adjustment 回退到 CPU。总耗时已达到 5 分钟目标，但后续若继续优化 BA，应单独构建带 CUDA 的 Ceres，并重新验证重建质量。
+
 ### 重建命令
 
 重建脚本使用环境变量指定 COLMAP 可执行文件，默认仍可回退到 colmap：
 
     FASTGS_COLMAP_EXECUTABLE=/home/liangjiahua/colmap-cuda/bin/colmap
-    FASTGS_COLMAP_USE_GPU=1
+    FASTGS_COLMAP_NEW_API=1
+    FASTGS_MAPPER_USE_GPU=1
+    FASTGS_CUDA_LIB_DIR=/home/liangjiahua/miniconda3/envs/dgsg/targets/x86_64-linux/lib
 
 移除强制的 --no_gpu，让 convert 使用 GPU 特征提取和匹配；Mapper 使用 CUDA/PBA 相关参数。
 
@@ -47,13 +64,10 @@
 
 200 端任务日志必须独立记录：
 
-    feature_extraction_seconds
-    feature_matching_seconds
-    mapper_seconds
-    undistortion_seconds
-    colmap_total_seconds
-    registered_image_count
-    points3d_count
+    colmap_metrics.json
+    events.jsonl 中的 colmap.metrics
+
+`colmap_metrics.json` 记录特征提取、特征匹配、Mapper 和图像去畸变各阶段耗时；worker 同时记录 COLMAP 总耗时。重建日志还保留原始 stdout/stderr，便于追查 CUDA、Ceres 和注册失败。
 
 COLMAP 失败时保留各阶段 stdout/stderr 和失败命令，但不记录 SSH 密码。
 
@@ -83,7 +97,7 @@ COLMAP 失败时保留各阶段 stdout/stderr 和失败命令，但不记录 SSH
 每次基准使用同一份 250 张 huiyi 数据集和独立任务目录。验收条件：
 
 1. CUDA 版 colmap -h 或版本信息确认构建包含 CUDA。
-2. GPU 被 COLMAP 实际使用，而不是只检测到驱动。
+2. 特征提取和匹配日志确认 GPU 被 COLMAP 实际使用，而不是只检测到驱动；Mapper 是否使用 GPU 需同时检查 Ceres 编译能力。
 3. COLMAP 阶段总耗时不超过 300 秒。
 4. 所有或绝大多数输入图片成功注册，具体数量记录在日志中。
 5. sparse/0/cameras.bin、images.bin、points3D.bin 均存在且非空。
@@ -91,4 +105,3 @@ COLMAP 失败时保留各阶段 stdout/stderr 和失败命令，但不记录 SSH
 7. 远端 PLY 与 130 端 BlobStore 文件的 SHA256 一致。
 
 本阶段只优化 COLMAP，不改变 FastGS 训练迭代次数和手机渲染协议。
-

@@ -1,6 +1,7 @@
 package com.echo.phone.data
 
 import com.echo.phone.data.glasses.GlassesConnection
+import com.echo.phone.data.spatial.PoseLoopDetector
 import com.echo.phone.domain.*
 import com.echo.phone.util.EchoLog
 import kotlinx.coroutines.CoroutineScope
@@ -25,6 +26,7 @@ class RecordingController(
     private val phoneMic = PhoneMicRecorder()
     private val qualityAnalyzer = PhotoQualityAnalyzer()
     private var lastImuSample: ImuSample? = null
+    private var poseLoopDetector: PoseLoopDetector? = null
 
     private val pendingUploads = AtomicInteger(0)
 
@@ -50,6 +52,7 @@ class RecordingController(
         EchoLog.i("已在后台创建空间会话 session=$id spaceType=$spaceType")
         sessionId = id
         memoryType = MemoryType.SPACE
+        poseLoopDetector = PoseLoopDetector()
         collectMedia(uploadAudio = false)
         collectImu()
         collectQuality()
@@ -68,6 +71,17 @@ class RecordingController(
         frameJob = scope.launch {
             glasses.frameFlow.collect { frame ->
                 if (frame.data.isEmpty()) return@collect
+                if (memoryType == MemoryType.SPACE) {
+                    val loop = poseLoopDetector?.onFrame(frame.timestampMs)
+                    if (loop != null) {
+                        glasses.sendGlassLoopDone(loop.traveledRotationDegrees.toFloat())
+                        EchoLog.i(
+                            "位姿回环完成 current=${loop.currentTimestampMs} previous=${loop.previousTimestampMs} " +
+                                "positionError=${"%.3f".format(loop.positionErrorMeters)}m " +
+                                "rotationError=${"%.2f".format(loop.rotationErrorDegrees)}deg"
+                        )
+                    }
+                }
                 if (!(frame.isKeyMoment || frameFilter.shouldKeep(frame))) return@collect
                 pendingUploads.incrementAndGet()
                 try {
@@ -105,6 +119,7 @@ class RecordingController(
             val batch = mutableListOf<ImuSample>()
             glasses.imuFlow.collect { imu ->
                 lastImuSample = imu
+                poseLoopDetector?.updateImu(imu)
                 batch.add(imu)
                 if (batch.size >= 25) {
                     val chunk = batch.toList()
@@ -161,6 +176,8 @@ class RecordingController(
         frameJob?.cancel(); frameJob?.join()
         audioJob?.cancel(); audioJob?.join()
         qualityJob = null; imuJob = null; frameJob = null; audioJob = null
+        poseLoopDetector?.reset()
+        poseLoopDetector = null
         val summary = repo.completeSession(id)
         sessionId = null
         return summary

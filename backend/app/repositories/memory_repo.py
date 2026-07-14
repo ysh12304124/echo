@@ -21,6 +21,7 @@ from app.domain.models import (
     Evidence,
     Event,
     IngestSession,
+    ImuSample,
     NavigationSummary,
     Person,
     SpaceAnchor,
@@ -35,6 +36,7 @@ from app.repositories.database import (
     PersonORM,
     QueryLogORM,
     SessionORM,
+    ImuSampleORM,
     SpaceMemoryORM,
     TimeMemoryORM,
 )
@@ -121,6 +123,36 @@ class MemoryRepository:
         if not orm:
             return [], []
         return _parse_json(orm.frame_paths), _parse_json(orm.audio_paths)
+
+    async def save_imu_samples(self, session_id: UUID, samples: list[ImuSample]) -> int:
+        if not samples:
+            return 0
+        self.db.add_all([
+            ImuSampleORM(
+                session_id=str(session_id),
+                ax=sample.ax, ay=sample.ay, az=sample.az,
+                gx=sample.gx, gy=sample.gy, gz=sample.gz,
+                timestamp_ms=sample.timestamp_ms,
+            )
+            for sample in samples
+        ])
+        await self.db.commit()
+        return len(samples)
+
+    async def list_imu_samples(self, session_id: UUID) -> list[ImuSample]:
+        result = await self.db.execute(
+            select(ImuSampleORM)
+            .where(ImuSampleORM.session_id == str(session_id))
+            .order_by(ImuSampleORM.timestamp_ms)
+        )
+        return [
+            ImuSample(
+                ax=row.ax, ay=row.ay, az=row.az,
+                gx=row.gx, gy=row.gy, gz=row.gz,
+                timestamp_ms=row.timestamp_ms,
+            )
+            for row in result.scalars().all()
+        ]
 
     async def link_session_memory(self, session_id: UUID, memory_id: UUID, status: MemoryStatus):
         await self.db.execute(
@@ -275,6 +307,9 @@ class MemoryRepository:
             anchors=json.dumps([a.model_dump(mode="json") for a in memory.anchors]),
             captured_at=memory.captured_at,
             identify_brief=memory.identify_brief,
+            scene_summary=memory.scene_summary,
+            model_format=memory.model_format,
+            loop_angle=memory.loop_angle,
             is_favorited=memory.is_favorited,
             session_id=str(memory.session_id) if memory.session_id else None,
         )
@@ -302,6 +337,9 @@ class MemoryRepository:
             anchors=anchors,
             captured_at=orm.captured_at,
             identify_brief=orm.identify_brief,
+            scene_summary=orm.scene_summary,
+            model_format=orm.model_format,
+            loop_angle=orm.loop_angle,
             is_favorited=orm.is_favorited,
             session_id=UUID(orm.session_id) if orm.session_id else None,
         )

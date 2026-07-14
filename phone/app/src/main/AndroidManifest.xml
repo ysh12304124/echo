@@ -20,7 +20,7 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
-    <application
+    <application android:hardwareAccelerated="true"
         android:name=".EchoApplication"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -30,6 +30,7 @@
         android:theme="@style/Theme.Echo">
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="true"
             android:theme="@style/Theme.Echo">
             <intent-filter>

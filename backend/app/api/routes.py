@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import BindingType, DataPartition, MemoryStatus, MemoryType, TimeScene
-from app.domain.models import NavigationSummary, SpaceMemory, TimeMemory
+from app.domain.models import ImuSample, NavigationSummary, SpaceMemory, TimeMemory
 from app.providers import get_provider_factory
 from app.repositories.database import get_db
 from app.repositories.memory_repo import MemoryRepository
@@ -25,6 +25,9 @@ from app.schemas import (
     EntitySummaryResponse,
     ExportResultResponse,
     IngestSessionResponse,
+    ImuBatchRequest,
+    ImuBatchResponse,
+    LoopDetectResponse,
     MemoryListResponse,
     MemorySummaryResponse,
     PersonDetailResponse,
@@ -46,6 +49,7 @@ from app.logging_setup import get_logger
 from app.services.ingest_pipeline import IngestPipeline
 from app.services.person_service import PersonService
 from app.services.query_engine import QueryEngine
+from app.services.spatial import detect_loop
 
 
 class ExportQueryRequest(BaseModel):
@@ -269,6 +273,48 @@ async def complete_session(session_id: UUID, repo: MemoryRepository = Depends(ge
     )
 
 
+@router.post(
+    "/ingest/sessions/{session_id}/imu",
+    response_model=ImuBatchResponse,
+    status_code=201,
+)
+async def upload_imu(
+    session_id: UUID,
+    req: ImuBatchRequest,
+    repo: MemoryRepository = Depends(get_repo),
+):
+    session = await repo.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    if session.memory_type != MemoryType.SPACE:
+        raise HTTPException(400, "IMU samples are only supported for space sessions")
+    samples = [ImuSample(**sample.model_dump()) for sample in req.samples]
+    accepted_count = await repo.save_imu_samples(session_id, samples)
+    log.info("收到 IMU 批数据 session=%s count=%d", session_id, accepted_count)
+    return ImuBatchResponse(session_id=session_id, accepted_count=accepted_count)
+
+
+@router.post(
+    "/ingest/sessions/{session_id}/loop-detect",
+    response_model=LoopDetectResponse,
+)
+async def loop_detect(
+    session_id: UUID,
+    repo: MemoryRepository = Depends(get_repo),
+):
+    session = await repo.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    if session.memory_type != MemoryType.SPACE:
+        raise HTTPException(400, "Loop detection is only supported for space sessions")
+    result = detect_loop(await repo.list_imu_samples(session_id))
+    return LoopDetectResponse(
+        loop_complete=result.loop_complete,
+        angle_degrees=result.angle_degrees,
+        confidence=result.confidence,
+    )
+
+
 # --- Memories ---
 
 @router.get("/memories", response_model=MemoryListResponse)
@@ -392,6 +438,9 @@ async def list_spaces(
             captured_at=s.captured_at,
             is_favorited=s.is_favorited,
             identify_brief=s.identify_brief,
+            scene_summary=s.scene_summary,
+            model_format=s.model_format,
+            loop_angle=s.loop_angle,
         )
         for s in spaces
     ]
@@ -422,6 +471,9 @@ async def get_space(space_id: UUID, repo: MemoryRepository = Depends(get_repo)):
         captured_at=space.captured_at,
         is_favorited=space.is_favorited,
         identify_brief=space.identify_brief,
+        scene_summary=space.scene_summary,
+        model_format=space.model_format,
+        loop_angle=space.loop_angle,
     )
 
 

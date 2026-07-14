@@ -17,6 +17,7 @@ from app.domain.enums import (
 )
 from app.domain.models import (
     Evidence,
+    ImuSample,
     IngestSession,
     NavigationSummary,
     SpaceAnchor,
@@ -26,6 +27,7 @@ from app.domain.models import (
 from app.logging_setup import get_logger
 from app.providers import ProviderFactory, get_provider_factory
 from app.repositories.memory_repo import MemoryRepository
+from app.services.spatial import detect_loop
 
 log = get_logger("ingest")
 
@@ -112,7 +114,8 @@ class IngestPipeline:
         if session.memory_type == MemoryType.TIME:
             return await self._process_time_session(session, frame_paths, audio_paths)
         else:
-            return await self._process_space_session(session, frame_paths)
+            imu_samples = await self.repo.list_imu_samples(session_id)
+            return await self._process_space_session(session, frame_paths, imu_samples)
 
     async def _process_time_session(
         self, session: IngestSession, frame_paths: list[str], audio_paths: list[str]
@@ -276,7 +279,10 @@ class IngestPipeline:
             Path(wav_path).unlink(missing_ok=True)
 
     async def _process_space_session(
-        self, session: IngestSession, frame_paths: list[str]
+        self,
+        session: IngestSession,
+        frame_paths: list[str],
+        imu_samples: list[ImuSample],
     ) -> SpaceMemory:
         reconstruction = self.providers.reconstruction()
         result = await reconstruction.reconstruct(frame_paths)
@@ -287,6 +293,11 @@ class IngestPipeline:
             "retry_required": SpaceQuality.RETRY_REQUIRED,
         }
         quality = quality_map.get(result.quality, SpaceQuality.GOOD)
+        loop = detect_loop(imu_samples)
+        model_format = None
+        if result.model_url:
+            suffix = Path(result.model_url).suffix.lower().lstrip(".")
+            model_format = suffix if suffix in {"ply", "splat", "glb"} else None
 
         anchors = [
             SpaceAnchor(
@@ -306,6 +317,8 @@ class IngestPipeline:
             anchors=anchors,
             captured_at=datetime.now(timezone.utc),
             identify_brief=session.title or "空间采集",
+            model_format=model_format,
+            loop_angle=loop.angle_degrees,
             session_id=session.id,
             title=session.title or "空间记忆",
         )

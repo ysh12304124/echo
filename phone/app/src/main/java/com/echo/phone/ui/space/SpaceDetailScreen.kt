@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -20,7 +21,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.echo.phone.EchoApplication
 import com.echo.phone.data.EchoRepository
 import com.echo.phone.domain.*
-import com.echo.phone.ui.common.Model3DViewer
+import com.echo.phone.ui.common.PointCloudViewer
 import kotlinx.coroutines.launch
 
 class SpaceDetailViewModel(
@@ -149,9 +150,9 @@ fun SpaceDetailScreen(spaceId: String, onBack: () -> Unit) {
                 Spacer(Modifier.height(16.dp))
 
                 Text("3D 空间模型", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(8.dp))
-                Card(Modifier.fillMaxWidth().height(280.dp)) {
-                    Model3DViewer(vm.modelAbsoluteUrl, Modifier.fillMaxSize())
+                
+                Card(Modifier.fillMaxWidth().height(360.dp)) {
+                    PointCloudViewer(vm.modelAbsoluteUrl, Modifier.fillMaxSize())
                 }
 
                 Spacer(Modifier.height(16.dp))

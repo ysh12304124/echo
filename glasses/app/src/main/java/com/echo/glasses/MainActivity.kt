@@ -2,6 +2,10 @@ package com.echo.glasses
 
 import android.content.IntentFilter
 import android.graphics.Color
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Bundle
 import android.util.Log
 import android.widget.TextView
@@ -12,18 +16,6 @@ import com.echo.glasses.receiver.KeyType
 import com.rokid.cxr.CXRServiceBridge
 import com.rokid.cxr.Caps
 
-/**
- * 眼镜端 Echo CustomApp：记忆控制中心。
- *
- * 交互（记忆完全由眼镜端主导）：
- *  - 进入后看到 3 个场景 Onsite / Meeting / Quality Time，默认选中 Onsite；
- *  - 待机时：滑动（双指前/后滑）在三个场景间切换选中项；
- *  - 单击选中的场景 → 启动记忆，上报 START(scene)，另两个场景置灰（不可选）；
- *  - 再次单击该场景 → 结束记忆，上报 STOP，另两个场景恢复可选。
- *
- * 显示：选择界面整体逆时针旋转 90°，以适配眼镜镜片显示方向。
- * 采集（音频/拍照）由眼镜固件经 CXR-L 直接送手机，本应用不采集媒体。
- */
 class MainActivity : AppCompatActivity() {
 
     private companion object {
@@ -32,11 +24,11 @@ class MainActivity : AppCompatActivity() {
         const val CLIENT_KEY = "rk_custom_client"
     }
 
-    /** 记忆场景，cmd 需与手机端 TimeScene 名称一致。 */
     private enum class Scene(val cmd: String, val label: String) {
         ONSITE("ONSITE", "Onsite"),
         MEETING("MEETING", "Meeting"),
-        QUALITY_TIME("QUALITY_TIME", "Quality Time"),
+        QUALITY_TIME("QUALITY_TIME", "Quality"),
+        SPACE("SPACE", "Space"),
     }
 
     private val scenes = Scene.values()
@@ -47,13 +39,67 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var hintText: TextView
     private lateinit var cloudText: TextView
+    private lateinit var guideText: TextView
     private lateinit var sceneViews: List<TextView>
 
     private val keyReceiver = KeyReceiver(KeyEventListener { keyType -> onKey(keyType) })
 
+    // ---- IMU ----
+    private lateinit var sensorManager: SensorManager
+    private var accel: Sensor? = null
+    private var gyro: Sensor? = null
+    private var imuActive = false
+    private var lastAx = 0f; private var lastAy = 0f; private var lastAz = 0f
+    private var lastGx = 0f; private var lastGy = 0f; private var lastGz = 0f
+
+    private val imuListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            when (event.sensor.type) {
+                Sensor.TYPE_ACCELEROMETER -> {
+                    lastAx = event.values[0]; lastAy = event.values[1]; lastAz = event.values[2]
+                }
+                Sensor.TYPE_GYROSCOPE -> {
+                    lastGx = event.values[0]; lastGy = event.values[1]; lastGz = event.values[2]
+                    sendImuSample()
+                }
+            }
+        }
+        override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
+    }
+
+    private fun startImu() {
+        if (imuActive) return
+        accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        gyro = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+        if (accel == null || gyro == null) { Log.w(TAG, "IMU 不可用"); return }
+        sensorManager.registerListener(imuListener, accel, SensorManager.SENSOR_DELAY_GAME)
+        sensorManager.registerListener(imuListener, gyro, SensorManager.SENSOR_DELAY_GAME)
+        imuActive = true
+        Log.i(TAG, "IMU 已启动")
+    }
+
+    private fun stopImu() {
+        if (!imuActive) return
+        sensorManager.unregisterListener(imuListener)
+        imuActive = false
+        Log.i(TAG, "IMU 已停止")
+    }
+
+    private fun sendImuSample() {
+        if (!recording || !imuActive) return
+        val caps = Caps().apply {
+            write("imu")
+            write(lastAx.toString()); write(lastAy.toString()); write(lastAz.toString())
+            write(lastGx.toString()); write(lastGy.toString()); write(lastGz.toString())
+            write(System.currentTimeMillis().toString())
+        }
+        bridge.sendMessage(CMD_KEY, caps)
+    }
+    // ---- IMU END ----
+
     private val statusListener = object : CXRServiceBridge.StatusListener {
         override fun onConnected(p0: String?, p1: String?, p2: Int) {
-            Log.i(TAG, "bridge onConnected p0=$p0 p1=$p1 p2=$p2"); runOnUiThread { cloudText.text = "手机已连接" }
+            Log.i(TAG, "bridge onConnected"); runOnUiThread { cloudText.text = "手机已连接" }
         }
         override fun onDisconnected() {
             Log.i(TAG, "bridge onDisconnected"); runOnUiThread { cloudText.text = "手机已断开" }
@@ -64,37 +110,53 @@ class MainActivity : AppCompatActivity() {
         override fun onAudioNoise(p0: Float) {}
     }
 
-    // 手机端经 rk_custom_client 回传的处理进度（如"上传完成"），仅作提示展示。
+    // phone → glasses messages via rk_custom_client
+    // ["status", text] = status text (e.g. "待机")
+    // ["guide", text] = recording guidance
+    // ["feedback", text] = quality warning
+    // ["loop_done", angle] = loop complete
     private val msgCallback = object : CXRServiceBridge.MsgCallback {
         override fun onReceive(name: String?, args: Caps?, bytes: ByteArray?) {
-            val text = args?.let { readLastString(it) }.orEmpty()
-            Log.d(TAG, "onReceive text=$text")
-            if (text.isNotBlank()) runOnUiThread { cloudText.text = "云端: $text" }
+            if (args == null || args.size() < 2) return
+            val tag = args.at(0).let { if (it.type() == Caps.Value.TYPE_STRING) it.string else null } ?: return
+            val text = args.at(1).let { if (it.type() == Caps.Value.TYPE_STRING) it.string else null } ?: return
+            when (tag) {
+                "status" -> runOnUiThread { cloudText.text = "云端: $text" }
+                "guide" -> runOnUiThread { guideText.text = text; guideText.visibility = android.view.View.VISIBLE }
+                "feedback" -> runOnUiThread {
+                    guideText.text = "! $text"
+                    guideText.visibility = android.view.View.VISIBLE
+                    guideText.postDelayed({
+                        if (guideText.text.startsWith("!")) guideText.visibility = android.view.View.GONE
+                    }, 2000)
+                }
+                "loop_done" -> runOnUiThread {
+                    guideText.text = "回环完成($text°), 可停止或继续"
+                    guideText.visibility = android.view.View.VISIBLE
+                }
+            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         statusText = findViewById(R.id.statusText)
         hintText = findViewById(R.id.hintText)
         cloudText = findViewById(R.id.cloudText)
+        guideText = findViewById(R.id.guideText)
         sceneViews = listOf(
             findViewById(R.id.sceneOnsite),
             findViewById(R.id.sceneMeeting),
             findViewById(R.id.sceneQuality),
+            findViewById(R.id.sceneSpace),
         )
-        // 单击场景选项：启动/结束该场景的记忆。
         sceneViews.forEachIndexed { i, tv -> tv.setOnClickListener { onSceneTap(i) } }
 
         bridge.setStatusListener(statusListener)
         val subRet = bridge.subscribe(CLIENT_KEY, msgCallback)
-        Log.i(
-            TAG,
-            "bridge 初始化 subscribe($CLIENT_KEY)=$subRet " +
-                "错误码定义 EINVAL=${CXRServiceBridge.EINVAL} EDUP=${CXRServiceBridge.EDUP} " +
-                "EFAULT=${CXRServiceBridge.EFAULT} EBUSY=${CXRServiceBridge.EBUSY}",
-        )
+        Log.i(TAG, "bridge 初始化 subscribe($CLIENT_KEY)=$subRet")
 
         registerReceiver(keyReceiver, IntentFilter().apply {
             addAction(KeyType.CLICK.action)
@@ -103,86 +165,86 @@ class MainActivity : AppCompatActivity() {
         })
 
         render()
-        Log.i(TAG, "Echo 眼镜端启动，已订阅 $CLIENT_KEY 并注册按键；默认场景=${scenes[selected].cmd}")
+        Log.i(TAG, "Echo 眼镜端启动 scenes=${scenes.size}")
     }
 
     override fun onDestroy() {
+        stopImu()
         runCatching { unregisterReceiver(keyReceiver) }
         super.onDestroy()
     }
 
     private fun onKey(keyType: KeyType) {
-        Log.i(TAG, "onKey ${keyType.name} recording=$recording")
         when (keyType) {
-            // 单击选中场景：待机→启动；记忆中→结束。
             KeyType.CLICK -> if (recording) stopMemory() else startMemory()
-            // 滑动切换选中场景（仅待机时）。
             KeyType.TWO_FINGER_SWIPE_FORWARD -> cycleScene(1)
             KeyType.TWO_FINGER_SWIPE_BACK -> cycleScene(-1)
             else -> {}
         }
     }
 
-    /** 点选某场景选项：待机→启动该场景；记忆中且为当前场景→结束；否则忽略（置灰）。 */
     private fun onSceneTap(index: Int) {
-        if (!recording) {
-            selected = index
-            startMemory()
-        } else if (index == selected) {
-            stopMemory()
-        }
+        if (!recording) { selected = index; startMemory() }
+        else if (index == selected) stopMemory()
     }
 
     private fun cycleScene(delta: Int) {
-        if (recording) return // 记忆中不允许切换场景
+        if (recording) return
         selected = ((selected + delta) % scenes.size + scenes.size) % scenes.size
-        Log.i(TAG, "切换场景 -> ${scenes[selected].cmd}")
         render()
     }
 
     private fun startMemory() {
         recording = true
+        startImu()
+        guideText.visibility = android.view.View.GONE
         val scene = scenes[selected]
         val ret = bridge.sendMessage(CMD_KEY, Caps().apply {
             write("cmd"); write("START"); write(scene.cmd)
         })
-        Log.i(TAG, "发送 START ${scene.cmd} -> sendMessage($CMD_KEY) 返回=$ret (0=成功,负值=失败)")
+        Log.i(TAG, "发送 START ${scene.cmd} -> sendMessage($CMD_KEY) 返回=$ret")
         render()
     }
 
     private fun stopMemory() {
         recording = false
+        stopImu()
+        guideText.text = ""
+        guideText.visibility = android.view.View.GONE
         val ret = bridge.sendMessage(CMD_KEY, Caps().apply {
             write("cmd"); write("STOP")
         })
-        Log.i(TAG, "发送 STOP -> sendMessage($CMD_KEY) 返回=$ret (0=成功,负值=失败)")
+        Log.i(TAG, "发送 STOP -> sendMessage($CMD_KEY) 返回=$ret")
         render()
     }
 
     private fun render() {
+        val sceneColors = mapOf(
+            0 to "#10B981", // Onsite green
+            1 to "#2563EB", // Meeting blue
+            2 to "#7C3AED", // Quality purple
+            3 to "#F59E0B", // Space orange
+        )
         sceneViews.forEachIndexed { i, tv ->
             val active = i == selected
             when {
-                // 记忆中：选中场景高亮，其它两个置灰且不可点。
                 recording && active -> {
                     tv.setTextColor(Color.WHITE)
-                    tv.setBackgroundColor(Color.parseColor("#3D5AFE"))
+                    tv.setBackgroundColor(Color.parseColor(sceneColors[i] ?: "#3D5AFE"))
                 }
                 recording && !active -> {
                     tv.setTextColor(Color.parseColor("#555555"))
                     tv.setBackgroundColor(Color.TRANSPARENT)
                 }
-                // 待机：选中场景高亮，其它两个可选。
                 active -> {
                     tv.setTextColor(Color.WHITE)
-                    tv.setBackgroundColor(Color.parseColor("#3D5AFE"))
+                    tv.setBackgroundColor(Color.parseColor(sceneColors[i] ?: "#3D5AFE"))
                 }
                 else -> {
                     tv.setTextColor(Color.parseColor("#AAAAAA"))
                     tv.setBackgroundColor(Color.TRANSPARENT)
                 }
             }
-            // 记忆中仅允许点当前场景（用于结束），其它置灰不可点。
             tv.isEnabled = !recording || active
         }
         if (recording) {
@@ -192,14 +254,5 @@ class MainActivity : AppCompatActivity() {
             statusText.text = "待机 · ${scenes[selected].label}"
             hintText.text = "滑动切换场景 · 单击启动记忆"
         }
-    }
-
-    private fun readLastString(caps: Caps): String {
-        var last = ""
-        for (i in 0 until caps.size()) {
-            val v = caps.at(i)
-            if (v.type() == Caps.Value.TYPE_STRING) last = v.string
-        }
-        return last
     }
 }

@@ -60,6 +60,31 @@ class UploadAckResponse(BaseModel):
     media_url: Optional[str] = None
 
 
+class ImuSampleRequest(BaseModel):
+    ax: float
+    ay: float
+    az: float
+    gx: float
+    gy: float
+    gz: float
+    timestamp_ms: int
+
+
+class ImuBatchRequest(BaseModel):
+    samples: list[ImuSampleRequest] = Field(default_factory=list)
+
+
+class ImuBatchResponse(BaseModel):
+    session_id: UUID
+    accepted_count: int
+
+
+class LoopDetectResponse(BaseModel):
+    loop_complete: bool
+    angle_degrees: float
+    confidence: float
+
+
 class FrameImageResponse(BaseModel):
     filename: str
     media_url: str
@@ -142,6 +167,9 @@ class SpaceMemoryDetailResponse(BaseModel):
     captured_at: Optional[datetime] = None
     is_favorited: bool = False
     identify_brief: str = ""
+    scene_summary: Optional[str] = None
+    model_format: Optional[str] = None
+    loop_angle: Optional[float] = None
 
     @field_serializer("captured_at")
     def _format_captured_at(self, value: Optional[datetime]) -> Optional[str]:

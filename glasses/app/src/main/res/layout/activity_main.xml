@@ -15,7 +15,6 @@
         android:textColor="#FFFFFF"
         android:textSize="22sp" />
 
-    <!-- 场景选择：Onsite / Meeting / Quality Time，高亮项为当前选择。 -->
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -26,30 +25,40 @@
             android:id="@+id/sceneOnsite"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="12dp"
-            android:padding="8dp"
+            android:layout_marginEnd="4dp"
+            android:padding="6dp"
             android:text="Onsite"
             android:textColor="#888888"
-            android:textSize="18sp" />
+            android:textSize="13sp" />
 
         <TextView
             android:id="@+id/sceneMeeting"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="12dp"
-            android:padding="8dp"
+            android:layout_marginEnd="4dp"
+            android:padding="6dp"
             android:text="Meeting"
             android:textColor="#888888"
-            android:textSize="18sp" />
+            android:textSize="13sp" />
 
         <TextView
             android:id="@+id/sceneQuality"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:padding="8dp"
-            android:text="Quality Time"
+            android:layout_marginEnd="4dp"
+            android:padding="6dp"
+            android:text="Quality"
             android:textColor="#888888"
-            android:textSize="18sp" />
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/sceneSpace"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="6dp"
+            android:text="Space"
+            android:textColor="#888888"
+            android:textSize="13sp" />
     </LinearLayout>
 
     <TextView
@@ -68,6 +77,16 @@
         android:gravity="center"
         android:textColor="#AAAAAA"
         android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/guideText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:gravity="center"
+        android:textColor="#F59E0B"
+        android:textSize="13sp"
+        android:visibility="gone" />
 
     <TextView
         android:id="@+id/cloudText"

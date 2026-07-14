@@ -41,6 +41,20 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+fun SpaceMemoryDetail.toMemorySummary() = MemorySummary(
+    memoryId = spaceId,
+    memoryType = MemoryType.SPACE,
+    status = MemoryStatus.COMPLETED,
+    identifyBrief = identifyBrief,
+    title = title.ifBlank { "空间记忆" },
+    scene = null,
+    partition = partition,
+    startedAt = capturedAt,
+    durationSeconds = 0,
+    evidenceStatus = quality ?: "pending",
+    isFavorited = isFavorited,
+)
+
 class HomeViewModel(
     private val repo: com.echo.phone.data.EchoRepository,
     private val glasses: GlassesConnection,
@@ -63,7 +77,12 @@ class HomeViewModel(
     fun refresh() {
         viewModelScope.launch {
             isRefreshing = true
-            try { memories = repo.listMemories(partitionFilter).sortedByDescending { it.startedAt }; error = null }
+            try {
+                val timeMemories = repo.listMemories(partitionFilter)
+                val spaceMemories = repo.listSpaces(partitionFilter).map { it.toMemorySummary() }
+                memories = (timeMemories + spaceMemories).sortedByDescending { it.startedAt ?: "" }
+                error = null
+            }
             catch (e: Exception) { error = e.message }
             delay(600); isRefreshing = false; loading = false
         }
@@ -72,7 +91,11 @@ class HomeViewModel(
     fun refreshWithReveal() {
         viewModelScope.launch {
             isRefreshing = true; revealNew = true
-            try { memories = repo.listMemories(partitionFilter).sortedByDescending { it.startedAt } }
+            try {
+                val timeMemories = repo.listMemories(partitionFilter)
+                val spaceMemories = repo.listSpaces(partitionFilter).map { it.toMemorySummary() }
+                memories = (timeMemories + spaceMemories).sortedByDescending { it.startedAt ?: "" }
+            }
             catch (e: Exception) { error = e.message }
             delay(800); isRefreshing = false; loading = false
             delay(600); revealNew = false
@@ -96,6 +119,7 @@ private fun sceneAccent(scene: TimeScene?): Color = when (scene) {
     TimeScene.MEETING -> Color(0xFF3B82F6)
     TimeScene.ONSITE -> Color(0xFF10B981)
     TimeScene.QUALITY_TIME -> Color(0xFF8B5CF6)
+    TimeScene.SPACE -> Color(0xFFF59E0B)
     null -> Color(0xFF9CA3AF)
 }
 private val MonoFont = FontFamily.Monospace
@@ -103,7 +127,7 @@ private val TimelineGray = Color(0xFFE5E7EB)
 
 // ── 呼吸灯 — 录制指示器 ──
 @Composable
-private fun BreathingDot(isActive: Boolean) {
+private fun BreathingDot(isActive: Boolean, color: Color = Color(0xFFEF4444)) {
     val t = rememberInfiniteTransition(label = "breath")
     val scale by t.animateFloat(0.6f, 1.4f, infiniteRepeatable(tween(1200, easing = EaseInOutCubic), RepeatMode.Reverse), label = "s")
     val alpha by t.animateFloat(0.4f, 1f, infiniteRepeatable(tween(1200, easing = EaseInOutCubic), RepeatMode.Reverse), label = "a")
@@ -113,7 +137,7 @@ private fun BreathingDot(isActive: Boolean) {
             .scale(if (isActive) scale else 1f)
             .alpha(if (isActive) alpha else 0.3f)
             .clip(CircleShape)
-            .background(if (isActive) Color(0xFFEF4444) else Color(0xFFD1D5DB))
+            .background(if (isActive) color else Color(0xFFD1D5DB))
     )
 }
 
@@ -148,11 +172,42 @@ fun HomeScreen(
         app.recordingCompleted.collect { vm.refreshWithReveal() }
     }
 
-    val isRec = ds.isRecordingTime || ds.isRecordingSpace
+    val recType by app.currentRecordingType.collectAsState()
+    val isRec = recType != EchoApplication.RecordingType.NONE
 
     // 录制开始 → 震动
     LaunchedEffect(isRec) {
         if (isRec) view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+    }
+
+    // 空间记忆场景选择对话框
+    var showSpaceDialog by remember { mutableStateOf(false) }
+    var pendingSpaceCallback by remember { mutableStateOf<((com.echo.phone.domain.SpaceType) -> Unit)?>(null) }
+    LaunchedEffect(Unit) {
+        app.pendingSpaceStart.collect { (_, cb) ->
+            pendingSpaceCallback = cb
+            showSpaceDialog = true
+        }
+    }
+    if (showSpaceDialog && pendingSpaceCallback != null) {
+        val cb = pendingSpaceCallback!!
+        AlertDialog(
+            onDismissRequest = { showSpaceDialog = false; pendingSpaceCallback = null },
+            title = { Text("选择空间记忆类型") },
+            text = { Text("请选择本次空间记忆的拍摄模式") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSpaceDialog = false; pendingSpaceCallback = null
+                    cb(com.echo.phone.domain.SpaceType.LARGE_SCENE)
+                }) { Text("大场景") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showSpaceDialog = false; pendingSpaceCallback = null
+                    cb(com.echo.phone.domain.SpaceType.SINGLE_OBJECT)
+                }) { Text("单物体") }
+            },
+        )
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp).padding(top = 20.dp)) {
@@ -165,15 +220,15 @@ fun HomeScreen(
         Box(Modifier.fillMaxWidth().shadow(8.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(GlassBgElevated).border(1.dp, GlassBorderElevated, RoundedCornerShape(18.dp)).padding(16.dp)) {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    BreathingDot(isRec)
+                    BreathingDot(isRec, if (recType == EchoApplication.RecordingType.SPACE) Color(0xFF3B82F6) else Color(0xFFEF4444))
                     Spacer(Modifier.width(10.dp))
                     Text(if (ds.connected) "眼镜已连接 · 电量 ${ds.batteryPercent}%" else "未连接", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                     if (!ds.connected) FilledTonalButton(onClick = { vm.connectGlasses() }, modifier = Modifier.height(34.dp)) { Text("连接") }
                 }
                 if (isRec) {
                     Spacer(Modifier.height(8.dp))
-                    if (ds.isRecordingTime) Text("● 时间录制中", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                    if (ds.isRecordingSpace) Text("◆ 空间采集中", style = MaterialTheme.typography.labelSmall, color = Color(0xFF10B981))
+                    if (recType == EchoApplication.RecordingType.TIME) Text("● 时间录制中", style = MaterialTheme.typography.labelSmall, color = Color(0xFFEF4444))
+                    if (recType == EchoApplication.RecordingType.SPACE) Text("● 空间录制中", style = MaterialTheme.typography.labelSmall, color = Color(0xFF3B82F6))
                 }
             }
         }
@@ -206,7 +261,10 @@ fun HomeScreen(
                                 if (isNewDate) TimelineDateLabel(thisDate)
                                 val isFirst = i == 0
                                 TimelineItem(i, vm.memories.size, vm.revealNew && isFirst, isNewDate && isFirst) {
-                                    MemoryCard(memory) { onNavigateMemory(memory.memoryId) }
+                                    MemoryCard(memory) {
+                            if (memory.memoryType == MemoryType.SPACE) onNavigateSpace(memory.memoryId)
+                            else onNavigateMemory(memory.memoryId)
+                        }
                                 }
                             }
                         }
@@ -257,7 +315,7 @@ private fun TimelineDateLabel(date: String) {
 
 @Composable
 private fun MemoryCard(memory: MemorySummary, onClick: () -> Unit) {
-    val accent = sceneAccent(memory.scene)
+    val accent = if (memory.memoryType == MemoryType.SPACE) Color(0xFFF59E0B) else sceneAccent(memory.scene)
     Card(
         Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).clickable { onClick() },
         colors = CardDefaults.cardColors(containerColor = Color.Transparent),

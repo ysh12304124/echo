@@ -1,7 +1,8 @@
 package com.echo.phone.domain
 
 enum class DataPartition { WORK, QUALITY_TIME }
-enum class TimeScene { MEETING, ONSITE, QUALITY_TIME }
+enum class TimeScene { MEETING, ONSITE, QUALITY_TIME, SPACE }
+enum class SpaceType(val label: String) { SINGLE_OBJECT("单物体"), LARGE_SCENE("大场景") }
 enum class MemoryType { TIME, SPACE }
 enum class MemoryStatus {
     NOT_STARTED, RECORDING, PAUSED, UPLOADING, PROCESSING, COMPLETED, FAILED
@@ -64,6 +65,7 @@ data class SpaceMemoryDetail(
     val isLocked: Boolean = false,
     val keyFrames: List<KeyFrame> = emptyList(),
     val anchors: List<SpaceAnchor> = emptyList(),
+    val capturedAt: String? = null,
 )
 
 data class QueryEvidence(
@@ -139,6 +141,12 @@ data class DeviceStatus(
 
 data class MediaFrame(val data: ByteArray, val timestampMs: Long, val isKeyMoment: Boolean = false)
 data class MediaAudio(val data: ByteArray, val timestampMs: Long)
+
+data class ImuSample(
+    val ax: Float, val ay: Float, val az: Float,
+    val gx: Float, val gy: Float, val gz: Float,
+    val timestampMs: Long,
+)
 
 /** 眼镜端下发的记忆控制指令类型。 */
 enum class GlassCommandType { START, STOP }

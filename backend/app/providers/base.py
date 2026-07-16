@@ -142,6 +142,20 @@ class BlobStore(ABC):
         pass
 
     @abstractmethod
+    async def append(self, key: str, data: bytes) -> str:
+        """按顺序把新分片追加写入 key 对应的文件，用于视频边录边传的不落地转发。"""
+        pass
+
+    @abstractmethod
+    async def patch(self, key: str, offset: int, data: bytes) -> str:
+        """覆盖写 key 对应文件从 offset 开始的字节，不改变文件长度以外的内容。
+
+        用于修正视频边录边发时已发出的头部信息（如 MediaRecorder 在 stop() 时
+        回改的 mdat box 64bit size 字段），须在 append 触发的最终 rename 之前调用。
+        """
+        pass
+
+    @abstractmethod
     async def get_path(self, key: str) -> Optional[str]:
         pass
 

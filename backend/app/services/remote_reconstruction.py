@@ -30,6 +30,13 @@ class ReconstructionArtifact:
     model_format: str
     size_bytes: int
     sha256: str
+    poses_url: str
+    poses_size_bytes: int
+    poses_sha256: str
+    anchor_url: str
+    anchor_size_bytes: int
+    anchor_sha256: str
+    anchor_method: str
 
 
 class SftpClient(Protocol):
@@ -238,8 +245,15 @@ class RemoteReconstructionService:
             sftp.get(remote_result, str(local_result))
             result = json.loads(local_result.read_text(encoding="utf-8"))
             remote_ply = result.get("ply_path")
-            if not remote_ply or result.get("status") != "completed":
-                raise ReconstructionError("remote result did not contain a completed PLY")
+            remote_poses = result.get("poses_path")
+            remote_anchor = result.get("anchor_path")
+            if (
+                not remote_ply
+                or not remote_poses
+                or not remote_anchor
+                or result.get("status") != "completed"
+            ):
+                raise ReconstructionError("remote result did not contain completed PLY, poses and anchor")
 
             local_ply = local_dir / "point_cloud.ply"
             sftp.get(remote_ply, str(local_ply))
@@ -250,17 +264,83 @@ class RemoteReconstructionService:
                 raise ReconstructionError("downloaded PLY SHA256 does not match remote result")
             event("downloading", "completed", size_bytes=local_ply.stat().st_size, sha256=digest)
 
+            local_poses = local_dir / "poses.txt"
+            sftp.get(remote_poses, str(local_poses))
+            if local_poses.stat().st_size <= 0:
+                raise ReconstructionError("downloaded poses.txt is empty")
+            pose_digest = sha256_file(local_poses)
+            if result.get("poses_sha256") and result["poses_sha256"] != pose_digest:
+                raise ReconstructionError("downloaded poses SHA256 does not match remote result")
+            pose_count = len(local_poses.read_text(encoding="utf-8").splitlines())
+            if result.get("pose_count") != pose_count:
+                raise ReconstructionError("downloaded poses count does not match remote result")
+            event(
+                "downloading_poses",
+                "completed",
+                size_bytes=local_poses.stat().st_size,
+                sha256=pose_digest,
+                pose_count=pose_count,
+            )
+
+            local_anchor = local_dir / "anchor.json"
+            sftp.get(remote_anchor, str(local_anchor))
+            if local_anchor.stat().st_size <= 0:
+                raise ReconstructionError("downloaded anchor.json is empty")
+            anchor_digest = sha256_file(local_anchor)
+            if result.get("anchor_sha256") and result["anchor_sha256"] != anchor_digest:
+                raise ReconstructionError("downloaded anchor SHA256 does not match remote result")
+            try:
+                anchor_values = json.loads(local_anchor.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise ReconstructionError("downloaded anchor.json is invalid JSON") from exc
+            anchor_method = anchor_values.get("method")
+            if not anchor_method or anchor_method != result.get("anchor_method"):
+                raise ReconstructionError("downloaded anchor method does not match remote result")
+            position = anchor_values.get("position")
+            if not isinstance(position, dict) or not all(
+                key in position for key in ("x", "y", "z")
+            ):
+                raise ReconstructionError("downloaded anchor.json is missing coordinates")
+            event(
+                "downloading_anchor",
+                "completed",
+                size_bytes=local_anchor.stat().st_size,
+                sha256=anchor_digest,
+                method=anchor_method,
+            )
+
             blob_key = f"spaces/{space_id}/models/point_cloud.ply"
             await blob_store.save(blob_key, local_ply.read_bytes(), "application/octet-stream")
-            event("storing", "completed", blob_key=blob_key)
+            poses_blob_key = f"spaces/{space_id}/models/poses.txt"
+            await blob_store.save(poses_blob_key, local_poses.read_bytes(), "text/plain; charset=utf-8")
+            anchor_blob_key = f"spaces/{space_id}/models/anchor.json"
+            await blob_store.save(anchor_blob_key, local_anchor.read_bytes(), "application/json")
+            event(
+                "storing", "completed", blob_key=blob_key,
+                poses_blob_key=poses_blob_key, anchor_blob_key=anchor_blob_key,
+            )
             artifact = ReconstructionArtifact(
                 job_id=job_id,
                 model_url=blob_store.get_url(blob_key),
                 model_format="ply",
                 size_bytes=local_ply.stat().st_size,
                 sha256=digest,
+                poses_url=blob_store.get_url(poses_blob_key),
+                poses_size_bytes=local_poses.stat().st_size,
+                poses_sha256=pose_digest,
+                anchor_url=blob_store.get_url(anchor_blob_key),
+                anchor_size_bytes=local_anchor.stat().st_size,
+                anchor_sha256=anchor_digest,
+                anchor_method=anchor_method,
             )
-            event("completed", "completed", size_bytes=artifact.size_bytes, sha256=digest)
+            event(
+                "completed", "completed", size_bytes=artifact.size_bytes,
+                sha256=digest, poses_size_bytes=artifact.poses_size_bytes,
+                poses_sha256=pose_digest,
+                anchor_size_bytes=artifact.anchor_size_bytes,
+                anchor_sha256=anchor_digest,
+                anchor_method=anchor_method,
+            )
             return artifact
         except Exception as exc:
             event("failed", "failed", error=str(exc))

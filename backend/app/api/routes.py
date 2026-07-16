@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import PurePosixPath
 from typing import Optional
 from uuid import UUID
 
@@ -20,8 +19,6 @@ from app.repositories.memory_repo import MemoryRepository
 from app.schemas import (
     BindingListResponse,
     BindingResponse,
-    FrameImageListResponse,
-    FrameImageResponse,
     CreateSessionRequest,
     EntityListResponse,
     EntitySummaryResponse,
@@ -93,28 +90,6 @@ def get_repo(db: AsyncSession = Depends(get_db)) -> MemoryRepository:
     return MemoryRepository(db)
 
 
-_FRAME_EXTENSIONS = {".jpg", ".jpeg"}
-
-
-def _validate_frame_filename(filename: str) -> str:
-    path = PurePosixPath(filename)
-    if filename != path.name or "\\" in filename:
-        raise HTTPException(400, "Invalid frame filename")
-    if path.suffix.lower() not in _FRAME_EXTENSIONS:
-        raise HTTPException(400, "Frame filename must be a jpg image")
-    return filename
-
-
-def _session_frame_key(session_id: UUID, filename: str) -> str:
-    filename = _validate_frame_filename(filename)
-    return f"sessions/{session_id}/frames/{filename}"
-
-
-def _session_frame_url(session_id: UUID, filename: str) -> str:
-    filename = _validate_frame_filename(filename)
-    return f"/api/v1/ingest/sessions/{session_id}/frames/{filename}"
-
-
 def _navigation_summary_response(memory) -> Optional[NavigationSummary]:
     if not memory.navigation_summary and not memory.key_frames:
         return None
@@ -178,69 +153,54 @@ async def create_session(req: CreateSessionRequest, repo: MemoryRepository = Dep
     )
 
 
-@router.post("/ingest/sessions/{session_id}/frames", response_model=UploadAckResponse, status_code=201)
-async def upload_frame(
+@router.post("/ingest/sessions/{session_id}/video", response_model=UploadAckResponse, status_code=201)
+async def upload_video_chunk(
     session_id: UUID,
     file: UploadFile = File(...),
-    timestamp_ms: int = Form(...),
-    is_key_moment: bool = Form(False),
+    index: int = Form(...),
+    is_last: bool = Form(False),
+    filename: Optional[str] = Form(None),
     repo: MemoryRepository = Depends(get_repo),
 ):
+    """眼镜边录边发、手机不落地转发的视频分片；按到达顺序 append 到会话视频文件。"""
     pipeline = IngestPipeline(repo)
     data = await file.read()
     try:
-        frame_id, accepted, filtered = await pipeline.upload_frame(
-            session_id, data, timestamp_ms, is_key_moment
-        )
+        video_path = await pipeline.append_video_chunk(session_id, index, is_last, filename, data)
     except ValueError as e:
-        log.warning("帧上传失败 session=%s: %s", session_id, e)
+        log.warning("视频分片上传失败 session=%s: %s", session_id, e)
         raise HTTPException(404, str(e))
     log.info(
-        "收到帧 session=%s bytes=%d ts=%d key=%s -> accepted=%s filtered=%s",
-        session_id,
-        len(data),
-        timestamp_ms,
-        is_key_moment,
-        accepted,
-        filtered,
+        "收到视频分片 session=%s index=%d bytes=%d is_last=%s filename=%s",
+        session_id, index, len(data), is_last, filename,
     )
-    filename = f"{frame_id}.jpg"
+    media_url = f"/api/v1/media/sessions/{session_id}/video/{filename}" if (video_path and filename) else None
     return UploadAckResponse(
-        id=frame_id,
-        accepted=accepted,
-        filtered=filtered,
-        filename=filename,
-        media_url=_session_frame_url(session_id, filename),
+        id=session_id,
+        accepted=True,
+        filtered=False,
+        filename=filename if is_last else None,
+        media_url=media_url,
     )
 
 
-@router.get("/ingest/sessions/{session_id}/frames", response_model=FrameImageListResponse)
-async def list_session_frames(
+@router.post("/ingest/sessions/{session_id}/video/patch", response_model=UploadAckResponse, status_code=201)
+async def patch_video_header(
     session_id: UUID,
+    file: UploadFile = File(...),
+    offset: int = Form(...),
     repo: MemoryRepository = Depends(get_repo),
 ):
-    session = await repo.get_session(session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    frame_paths, _ = await repo.get_session_media_paths(session_id)
-    items = [
-        FrameImageResponse(
-            filename=PurePosixPath(path).name,
-            media_url=_session_frame_url(session_id, PurePosixPath(path).name),
-        )
-        for path in frame_paths
-    ]
-    return FrameImageListResponse(session_id=session_id, items=items, total=len(items))
-
-
-@router.get("/ingest/sessions/{session_id}/frames/{filename}")
-async def get_session_frame(session_id: UUID, filename: str):
-    key = _session_frame_key(session_id, filename)
-    blob = get_provider_factory().blob_store()
-    path = await blob.get_path(key)
-    if not path:
-        raise HTTPException(404, "Frame not found")
-    return FileResponse(path, media_type="image/jpeg")
+    """覆盖写视频临时文件头部：MediaRecorder 结束时会回改 mdat box 等头部字段，
+    边录边发已发出的旧值需要在 video_end 之前用录制结束后重读的最终头部覆盖。"""
+    pipeline = IngestPipeline(repo)
+    data = await file.read()
+    try:
+        await pipeline.patch_video_header(session_id, offset, data)
+    except ValueError as e:
+        log.warning("视频头部覆盖失败 session=%s: %s", session_id, e)
+        raise HTTPException(404, str(e))
+    return UploadAckResponse(id=session_id, accepted=True, filtered=False)
 
 
 @router.post("/ingest/sessions/{session_id}/audio", response_model=UploadAckResponse, status_code=201)
@@ -326,13 +286,13 @@ async def upload_imu(
     req: ImuBatchRequest,
     repo: MemoryRepository = Depends(get_repo),
 ):
-    session = await repo.get_session(session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    if session.memory_type != MemoryType.SPACE:
-        raise HTTPException(400, "IMU samples are only supported for space sessions")
+    # 空间记忆现附加到当前场景 session 下（双指双击触控板开关），不再要求独立的 SPACE 会话。
+    pipeline = IngestPipeline(repo)
     samples = [ImuSample(**sample.model_dump()) for sample in req.samples]
-    accepted_count = await repo.save_imu_samples(session_id, samples)
+    try:
+        accepted_count = await pipeline.append_imu_samples(session_id, samples)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
     log.info("收到 IMU 批数据 session=%s count=%d", session_id, accepted_count)
     return ImuBatchResponse(session_id=session_id, accepted_count=accepted_count)
 

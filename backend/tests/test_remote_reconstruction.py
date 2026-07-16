@@ -50,9 +50,27 @@ class FakeSsh:
         ply = result_dir / "point_cloud.ply"
         ply.write_bytes(b"ply\n")
         remote_ply = "/jobs/" + str(ply.relative_to(self.sftp.remote_root / "jobs"))
+        poses = remote_job / "poses.txt"
+        poses.write_text("1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1\n")
+        anchor = remote_job / "anchor.json"
+        anchor.write_text(
+            '{"method":"robust_ray_intersection",'
+            '"coordinate_system":"colmap_world",'
+            '"position":{"x":0.0,"y":0.0,"z":0.0}}'
+        )
         (remote_job / "result.json").write_text(
-            '{"status":"completed","ply_path":"%s","sha256":"%s"}'
-            % (remote_ply, hashlib.sha256(b"ply\n").hexdigest())
+            '{"status":"completed","ply_path":"%s","sha256":"%s",'
+            '"poses_path":"%s","poses_sha256":"%s","pose_count":1,'
+            '"anchor_path":"%s","anchor_sha256":"%s",'
+            '"anchor_method":"robust_ray_intersection"}'
+            % (
+                remote_ply,
+                hashlib.sha256(b"ply\n").hexdigest(),
+                "/jobs/" + str(poses.relative_to(self.sftp.remote_root / "jobs")),
+                hashlib.sha256(poses.read_bytes()).hexdigest(),
+                "/jobs/" + str(anchor.relative_to(self.sftp.remote_root / "jobs")),
+                hashlib.sha256(anchor.read_bytes()).hexdigest(),
+            )
         )
         return 0, "ok", ""
 
@@ -94,3 +112,5 @@ async def test_remote_reconstruction_uploads_images_and_publishes_ply(tmp_path):
     assert fake_ssh.command is not None
     assert (remote_root / "jobs").exists()
     assert list((tmp_path / "blobs").rglob("point_cloud.ply"))
+    assert list((tmp_path / "blobs").rglob("poses.txt"))
+    assert list((tmp_path / "blobs").rglob("anchor.json"))

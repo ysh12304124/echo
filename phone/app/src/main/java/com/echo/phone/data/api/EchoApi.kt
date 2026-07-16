@@ -12,12 +12,21 @@ interface EchoApiService {
     suspend fun createSession(@Body request: CreateSessionRequest): IngestSessionDto
 
     @Multipart
-    @POST("ingest/sessions/{sessionId}/frames")
-    suspend fun uploadFrame(
+    @POST("ingest/sessions/{sessionId}/video")
+    suspend fun uploadVideoChunk(
         @Path("sessionId") sessionId: String,
         @Part file: MultipartBody.Part,
-        @Part("timestamp_ms") timestampMs: RequestBody,
-        @Part("is_key_moment") isKeyMoment: RequestBody? = null,
+        @Part("index") index: RequestBody,
+        @Part("is_last") isLast: RequestBody,
+        @Part("filename") filename: RequestBody? = null,
+    ): UploadAckDto
+
+    @Multipart
+    @POST("ingest/sessions/{sessionId}/video/patch")
+    suspend fun patchVideoHeader(
+        @Path("sessionId") sessionId: String,
+        @Part file: MultipartBody.Part,
+        @Part("offset") offset: RequestBody,
     ): UploadAckDto
 
     @Multipart

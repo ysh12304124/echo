@@ -140,6 +140,7 @@ class IngestSession(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     frame_count: int = 0
     audio_chunk_count: int = 0
+    video_path: Optional[str] = None
 
 
 class ImuSample(BaseModel):

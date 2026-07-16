@@ -28,6 +28,7 @@ class SessionORM(Base):
     audio_chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     frame_paths: Mapped[str] = mapped_column(Text, default="[]")
     audio_paths: Mapped[str] = mapped_column(Text, default="[]")
+    video_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class ImuSampleORM(Base):
@@ -178,6 +179,10 @@ async def init_db():
             await conn.execute(text("ALTER TABLE space_memories ADD COLUMN model_format TEXT"))
         if "loop_angle" not in space_columns:
             await conn.execute(text("ALTER TABLE space_memories ADD COLUMN loop_angle REAL"))
+        result = await conn.execute(text("PRAGMA table_info(ingest_sessions)"))
+        session_columns = {row[1] for row in result.fetchall()}
+        if "video_path" not in session_columns:
+            await conn.execute(text("ALTER TABLE ingest_sessions ADD COLUMN video_path TEXT"))
 
 
 async def get_db() -> AsyncSession:

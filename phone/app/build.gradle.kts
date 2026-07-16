@@ -21,9 +21,6 @@ android {
         // 眼镜端 Echo CustomApp 的包名与入口（须与 glasses/ 模块一致）。
         buildConfigField("String", "GLASS_APP_PACKAGE", "\"com.echo.glasses\"")
         buildConfigField("String", "GLASS_APP_ENTRY", "\".MainActivity\"")
-        // 关键帧拍照间隔（毫秒）。时间记忆按此周期触发拍照作为关键帧。
-        buildConfigField("long", "PHOTO_INTERVAL_MS", "4000L")
-        buildConfigField("long", "SPACE_PHOTO_INTERVAL_MS", "200L")
         // true=用 Mock 眼镜（无真机离线开发）；false=接真实 Rokid CXR-L SDK。
         buildConfigField("boolean", "USE_MOCK_GLASSES", "false")
     }

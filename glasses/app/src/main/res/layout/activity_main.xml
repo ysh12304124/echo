@@ -45,21 +45,20 @@
             android:id="@+id/sceneQuality"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="4dp"
             android:padding="6dp"
             android:text="Quality"
             android:textColor="#888888"
             android:textSize="13sp" />
-
-        <TextView
-            android:id="@+id/sceneSpace"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:padding="6dp"
-            android:text="Space"
-            android:textColor="#888888"
-            android:textSize="13sp" />
     </LinearLayout>
+
+    <TextView
+        android:id="@+id/spaceTag"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="空间记忆"
+        android:textColor="#555555"
+        android:textSize="12sp" />
 
     <TextView
         android:id="@+id/statusText"

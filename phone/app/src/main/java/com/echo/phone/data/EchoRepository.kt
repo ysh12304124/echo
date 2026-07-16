@@ -50,49 +50,6 @@ class EchoRepository(private val api: EchoApiService) {
         return api.listPersons(partition = partition?.name?.lowercase()).items.map { it.toDomain() }
     }
 
-    suspend fun createAndUploadSession(
-        memoryType: MemoryType,
-        scene: TimeScene?,
-        partition: DataPartition,
-        title: String,
-        frames: List<MediaFrame>,
-        audioChunks: List<MediaAudio>,
-    ): MemorySummary {
-        val session = api.createSession(
-            CreateSessionRequest(
-                memory_type = memoryType.name.lowercase(),
-                scene = scene?.name?.lowercase(),
-                partition = partition.name.lowercase(),
-                title = title,
-            )
-        )
-
-        for (frame in frames) {
-            val part = MultipartBody.Part.createFormData(
-                "file", "frame.jpg",
-                frame.data.toRequestBody("image/jpeg".toMediaType())
-            )
-            api.uploadFrame(
-                session.session_id, part,
-                frame.timestampMs.toString().toRequestBody(),
-                if (frame.isKeyMoment) "true".toRequestBody() else null,
-            )
-        }
-
-        for (audio in audioChunks) {
-            val part = MultipartBody.Part.createFormData(
-                "file", "audio.pcm",
-                audio.data.toRequestBody("audio/pcm".toMediaType())
-            )
-            api.uploadAudio(
-                session.session_id, part,
-                audio.timestampMs.toString().toRequestBody(),
-            )
-        }
-
-        return api.completeSession(session.session_id).toDomain()
-    }
-
     // --- 边采边传：流式会话 ---
 
     suspend fun startSession(
@@ -112,22 +69,32 @@ class EchoRepository(private val api: EchoApiService) {
         return session.session_id
     }
 
-    suspend fun uploadFrame(sessionId: String, frame: MediaFrame) {
-        val part = MultipartBody.Part.createFormData(
-            "file", "frame.jpg", frame.data.toRequestBody("image/jpeg".toMediaType())
-        )
-        api.uploadFrame(
-            sessionId, part,
-            frame.timestampMs.toString().toRequestBody(),
-            if (frame.isKeyMoment) "true".toRequestBody() else null,
-        )
-    }
-
     suspend fun uploadAudio(sessionId: String, audio: MediaAudio) {
         val part = MultipartBody.Part.createFormData(
             "file", "audio.pcm", audio.data.toRequestBody("audio/pcm".toMediaType())
         )
         api.uploadAudio(sessionId, part, audio.timestampMs.toString().toRequestBody())
+    }
+
+    /** 视频分片不落地直接转发后台；[isLast]=true 时携带最终 [filename]，[bytes] 可为空。 */
+    suspend fun uploadVideoChunk(sessionId: String, index: Int, isLast: Boolean, filename: String?, bytes: ByteArray) {
+        val part = MultipartBody.Part.createFormData(
+            "file", "chunk.bin", bytes.toRequestBody("application/octet-stream".toMediaType())
+        )
+        api.uploadVideoChunk(
+            sessionId, part,
+            index.toString().toRequestBody(),
+            isLast.toString().toRequestBody(),
+            filename?.toRequestBody(),
+        )
+    }
+
+    /** 用录制结束后重读的最终文件头部覆盖之前边录边发时发出的旧头部(MediaRecorder stop() 会回改 mdat size 等字段)。 */
+    suspend fun patchVideoHeader(sessionId: String, offset: Long, bytes: ByteArray) {
+        val part = MultipartBody.Part.createFormData(
+            "file", "patch.bin", bytes.toRequestBody("application/octet-stream".toMediaType())
+        )
+        api.patchVideoHeader(sessionId, part, offset.toString().toRequestBody())
     }
 
     suspend fun uploadImuBatch(sessionId: String, samples: List<ImuSample>) {

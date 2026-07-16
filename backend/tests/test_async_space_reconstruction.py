@@ -1,5 +1,4 @@
 import asyncio
-import io
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -24,14 +23,7 @@ async def test_space_completion_returns_processing_then_publishes_mock_model(mon
         assert response.status_code == 201
         session_id = response.json()["session_id"]
 
-        for index in range(3):
-            response = await client.post(
-                f"/api/v1/ingest/sessions/{session_id}/frames",
-                files={"file": (f"frame-{index}.jpg", io.BytesIO(b"image"), "image/jpeg")},
-                data={"timestamp_ms": index * 1000},
-            )
-            assert response.status_code == 201
-
+        # 眼镜端已不再拍照，帧上传接口已移除；空间重建 mock 流程不依赖帧内容即可完成。
         response = await client.post(f"/api/v1/ingest/sessions/{session_id}/complete")
         assert response.status_code == 200
         memory_id = response.json()["memory_id"]

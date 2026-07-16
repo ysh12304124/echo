@@ -220,6 +220,26 @@ class LocalBlobStore(BlobStore):
     path.write_bytes(data)
     return str(path)
 
+  async def append(self, key: str, data: bytes) -> str:
+    path = self._resolve_key(key)
+    if path is None:
+      raise ValueError("Invalid blob key")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "ab") as f:
+      f.write(data)
+    return str(path)
+
+  async def patch(self, key: str, offset: int, data: bytes) -> str:
+    path = self._resolve_key(key)
+    if path is None:
+      raise ValueError("Invalid blob key")
+    if not path.exists():
+      raise ValueError("Blob not found for patch")
+    with open(path, "r+b") as f:
+      f.seek(offset)
+      f.write(data)
+    return str(path)
+
   async def get_path(self, key: str) -> Optional[str]:
     path = self._resolve_key(key)
     if path is None:

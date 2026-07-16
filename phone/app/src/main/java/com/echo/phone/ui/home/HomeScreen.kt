@@ -154,8 +154,14 @@ private fun sceneAccent(scene: TimeScene?): Color = when (scene) {
     TimeScene.MEETING -> Color(0xFF3B82F6)
     TimeScene.ONSITE -> Color(0xFF10B981)
     TimeScene.QUALITY_TIME -> Color(0xFF8B5CF6)
-    TimeScene.SPACE -> Color(0xFFF59E0B)
     null -> Color(0xFF9CA3AF)
+}
+
+private fun sceneLabel(scene: TimeScene?): String = when (scene) {
+    TimeScene.MEETING -> "Meeting"
+    TimeScene.ONSITE -> "Onsite"
+    TimeScene.QUALITY_TIME -> "Quality Time"
+    null -> ""
 }
 private val MonoFont = FontFamily.Monospace
 private val TimelineGray = Color(0xFFE5E7EB)
@@ -217,8 +223,9 @@ fun HomeScreen(
 
     // 自动重连: app 启动时如果蓝牙/眼镜可能已连, 尝试建 CXR 会话
     LaunchedEffect(Unit) { vm.connectGlasses() }
-    val recType by app.currentRecordingType.collectAsState()
-    val isRec = recType != EchoApplication.RecordingType.NONE
+    val activeScene by app.activeScene.collectAsState()
+    val justCompletedScene by app.justCompletedScene.collectAsState()
+    val isRec = activeScene != null
 
     // 录制开始 → 震动
     LaunchedEffect(isRec) {
@@ -234,36 +241,6 @@ fun HomeScreen(
         vm.pendingDeleteId = null
     }
 
-    // 空间记忆场景选择对话框
-    var showSpaceDialog by remember { mutableStateOf(false) }
-    var pendingSpaceCallback by remember { mutableStateOf<((com.echo.phone.domain.SpaceType) -> Unit)?>(null) }
-    LaunchedEffect(Unit) {
-        app.pendingSpaceStart.collect { (_, cb) ->
-            pendingSpaceCallback = cb
-            showSpaceDialog = true
-        }
-    }
-    if (showSpaceDialog && pendingSpaceCallback != null) {
-        val cb = pendingSpaceCallback!!
-        AlertDialog(
-            onDismissRequest = { showSpaceDialog = false; pendingSpaceCallback = null },
-            title = { Text("选择空间记忆类型") },
-            text = { Text("请选择本次空间记忆的拍摄模式") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showSpaceDialog = false; pendingSpaceCallback = null
-                    cb(com.echo.phone.domain.SpaceType.LARGE_SCENE)
-                }) { Text("大场景") }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showSpaceDialog = false; pendingSpaceCallback = null
-                    cb(com.echo.phone.domain.SpaceType.SINGLE_OBJECT)
-                }) { Text("单物体") }
-            },
-        )
-    }
-
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp).padding(top = 20.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text(title, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface)
@@ -274,15 +251,16 @@ fun HomeScreen(
         Box(Modifier.fillMaxWidth().shadow(8.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(GlassBgElevated).border(1.dp, GlassBorderElevated, RoundedCornerShape(18.dp)).padding(16.dp)) {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    BreathingDot(isRec, if (recType == EchoApplication.RecordingType.SPACE) Color(0xFF3B82F6) else Color(0xFFEF4444))
+                    BreathingDot(isRec, sceneAccent(activeScene).takeIf { isRec } ?: Color(0xFFEF4444))
                     Spacer(Modifier.width(10.dp))
-                    Text(if (ds.connected) "眼镜已连接 · 电量 ${ds.batteryPercent}%" else "未连接", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    val statusText = when {
+                        activeScene != null -> "${sceneLabel(activeScene)}记忆中"
+                        justCompletedScene != null -> "${sceneLabel(justCompletedScene)}记忆结束"
+                        ds.connected -> "眼镜已连接 · 电量 ${ds.batteryPercent}%"
+                        else -> "未连接"
+                    }
+                    Text(statusText, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                     if (!ds.connected) FilledTonalButton(onClick = { vm.connectGlasses() }, modifier = Modifier.height(34.dp)) { Text("连接") }
-                }
-                if (isRec) {
-                    Spacer(Modifier.height(8.dp))
-                    if (recType == EchoApplication.RecordingType.TIME) Text("● 时间录制中", style = MaterialTheme.typography.labelSmall, color = Color(0xFFEF4444))
-                    if (recType == EchoApplication.RecordingType.SPACE) Text("● 空间录制中", style = MaterialTheme.typography.labelSmall, color = Color(0xFF3B82F6))
                 }
             }
         }

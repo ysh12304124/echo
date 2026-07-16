@@ -89,7 +89,24 @@ class MemoryRepository:
             created_at=orm.created_at,
             frame_count=orm.frame_count,
             audio_chunk_count=orm.audio_chunk_count,
+            video_path=orm.video_path,
         )
+
+    async def update_session_video(self, session_id: UUID, video_path: str):
+        result = await self.db.execute(
+            select(SessionORM).where(SessionORM.id == str(session_id))
+        )
+        orm = result.scalar_one_or_none()
+        if orm:
+            orm.video_path = video_path
+            await self.db.commit()
+
+    async def get_session_video_path(self, session_id: UUID) -> Optional[str]:
+        result = await self.db.execute(
+            select(SessionORM).where(SessionORM.id == str(session_id))
+        )
+        orm = result.scalar_one_or_none()
+        return orm.video_path if orm else None
 
     async def update_session_frames(self, session_id: UUID, frame_path: str):
         result = await self.db.execute(

@@ -3,7 +3,6 @@ package com.echo.phone.data.glasses.cxr
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 import com.echo.phone.BuildConfig
 import com.echo.phone.data.glasses.GlassesConnection
 import com.echo.phone.data.glasses.GlassesConnectionException
@@ -11,22 +10,16 @@ import com.echo.phone.domain.*
 import com.echo.phone.util.EchoLog
 import com.rokid.cxr.Caps
 import com.rokid.cxr.link.CXRLink
-import com.rokid.cxr.link.callbacks.IAudioStreamCbk
 import com.rokid.cxr.link.callbacks.ICXRSessionCbk
 import com.rokid.cxr.link.callbacks.ICustomCmdCbk
 import com.rokid.cxr.link.callbacks.IGlassAppCbk
-import com.rokid.cxr.link.callbacks.IImageStreamCbk
 import com.rokid.cxr.link.utils.CxrDefs
 import com.rokid.sprite.aiapp.externalapp.auth.AuthResult
 import com.rokid.sprite.aiapp.externalapp.auth.AuthorizationHelper
 import com.rokid.sprite.aiapp.externalapp.auth.GlassPermission
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
-import okhttp3.OkHttpClient
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
@@ -37,18 +30,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
-import java.io.ByteArrayOutputStream
 import java.lang.ref.WeakReference
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 基于 Rokid CXR-L SDK 的眼镜连接实现（手机端主导）。
  *
  * 链路：鉴权（Rokid AI App）→ 建 CustomApp 会话 → 等链路+蓝牙就绪 → appStart 拉起眼镜端 Echo App
- *      → 订阅音频/拍照/自定义指令。采集由眼镜固件经 CXR-L 送达手机：
- *      - 音频 PCM(16k/mono/16bit) 累积成块 → [audioFlow]
- *      - 关键帧由手机按间隔 takePhoto 触发，JPEG → [frameFlow]
- *      - 眼镜物理键经 rk_custom_key → [keyEvents]
+ *      → 订阅自定义指令。眼镜端仅录制视频(无拍照/无录音)，边录边把分片经 rk_custom_key 推送给手机，
+ *      手机不落地直接转发后台，见 [videoChunkFlow]；IMU（空间记忆开启时）经 rk_custom_key → [imuFlow]；
+ *      START/STOP 场景指令经 rk_custom_key → [commands]。
  *
  * 鉴权需 Activity 与 onActivityResult 配合：Activity 侧调用 [attachActivity] 与 [onAuthResult]。
  */
@@ -65,11 +55,6 @@ class CxrGlassesConnection(
         private const val SESSION_AVAILABLE_TIMEOUT_MS = 15_000L
         // 等待 appStart 回调 / 会话「开始」(onSessionStart) 的超时。
         private const val APP_START_TIMEOUT_MS = 10_000L
-        // 1 秒 PCM @16kHz/mono/16bit = 32000 字节，作为一次音频块上传粒度。
-        private const val AUDIO_CHUNK_BYTES = 32_000
-        private const val PHOTO_W = 1024
-        private const val PHOTO_H = 768
-        private const val PHOTO_Q = 80
     }
 
     private val _connectionState = MutableStateFlow(GlassesConnectionState.DISCONNECTED)
@@ -78,11 +63,8 @@ class CxrGlassesConnection(
     private val _deviceStatus = MutableStateFlow(DeviceStatus(connected = false))
     override val deviceStatus = _deviceStatus.asStateFlow()
 
-    private val _frameFlow = MutableSharedFlow<MediaFrame>(extraBufferCapacity = 128)
-    override val frameFlow = _frameFlow.asSharedFlow()
-
-    private val _audioFlow = MutableSharedFlow<MediaAudio>(extraBufferCapacity = 128)
-    override val audioFlow = _audioFlow.asSharedFlow()
+    private val _videoChunkFlow = MutableSharedFlow<VideoChunk>(extraBufferCapacity = 256)
+    override val videoChunkFlow = _videoChunkFlow.asSharedFlow()
 
     private val _imuFlow = MutableSharedFlow<ImuSample>(extraBufferCapacity = 256)
     override val imuFlow = _imuFlow.asSharedFlow()
@@ -94,13 +76,6 @@ class CxrGlassesConnection(
     private var connecting = false
     private var activityRef: WeakReference<Activity>? = null
     private var authDeferred: CompletableDeferred<String>? = null
-
-    private var photoJob: Job? = null
-    private var paused = false
-    private val pendingKeyMoment = AtomicBoolean(false)
-    private val audioBuffer = ByteArrayOutputStream()
-    private val audioLock = Any()
-    private val videoBuffers = java.util.HashMap<String, VideoChunk>()
 
     // CustomApp 会话生命周期（来自 ICXRSessionCbk）：available=眼镜侧就绪可拉起；started=CustomApp 已连接、指令通道就绪。
     private val sessionAvailable = MutableStateFlow(false)
@@ -150,6 +125,15 @@ class CxrGlassesConnection(
 
     override suspend fun connect() {
         if (connecting) { EchoLog.w("already connecting"); return }
+        if (_connectionState.value == GlassesConnectionState.CONNECTED ||
+            _connectionState.value == GlassesConnectionState.RECORDING
+        ) {
+            // HomeScreen 的 LaunchedEffect(Unit) 在每次重新进入首页 Tab 时都会调用 connectGlasses()；
+            // 若不在此拦截，会重复创建 CXRLink 并把同一个 customCmdCallback 注册到多条链路上，
+            // 导致眼镜端每条指令（尤其是 video_chunk/video_end）被收到并处理多次。
+            EchoLog.i("已处于连接状态(${_connectionState.value})，忽略重复 connect()")
+            return
+        }
         connecting = true
         val activity = activityRef?.get()
             ?: throw GlassesConnectionException("请在 Echo 应用前台发起连接")
@@ -169,7 +153,7 @@ class CxrGlassesConnection(
             EchoLog.i("链路就绪(CXR/蓝牙已连接)")
             ensureGlassAppRunning()
             registerCapabilityCallbacks()
-            EchoLog.i("已注册音频/图像/自定义指令回调，眼镜连接完成")
+            EchoLog.i("已注册自定义指令回调，眼镜连接完成")
         connecting = false
             _connectionState.value = GlassesConnectionState.CONNECTED
             _deviceStatus.value = DeviceStatus(connected = true, batteryPercent = CxrLinkHub.batteryPercent.value)
@@ -274,8 +258,6 @@ class CxrGlassesConnection(
 
     private fun registerCapabilityCallbacks() {
         val link = cxrLink ?: return
-        link.setCXRAudioCbk(audioCallback)
-        link.setCXRImageCbk(imageCallback)
         link.setCXRCustomCmdCbk(customCmdCallback)
         runCatching { link.getGlassDeviceInfo() }
     }
@@ -297,9 +279,7 @@ class CxrGlassesConnection(
     }
 
     override suspend fun disconnect() {
-        stopPhotoLoop()
         val link = cxrLink
-        runCatching { link?.stopAudioStream() }
         runCatching { link?.appStop(noopAppCbk) }
         runCatching { link?.disconnect() }
         cxrLink = null
@@ -308,75 +288,19 @@ class CxrGlassesConnection(
         _deviceStatus.value = DeviceStatus(connected = false)
     }
 
-    // ---- 录制控制：音频流 + 拍照关键帧 ----
+    // ---- 录制控制 ----
 
     override suspend fun startTimeRecording(scene: TimeScene, partition: DataPartition) {
         cxrLink ?: throw GlassesConnectionException("眼镜未连接")
-        paused = false
-        startPhotoLoop()
         _connectionState.value = GlassesConnectionState.RECORDING
         _deviceStatus.value = _deviceStatus.value.copy(isRecordingTime = true)
         sendGlassStatus("记忆中")
     }
 
-    override suspend fun startSpaceRecording() {
-        cxrLink ?: throw GlassesConnectionException("眼镜未连接")
-        paused = false
-        startPhotoLoop(BuildConfig.SPACE_PHOTO_INTERVAL_MS)
-        _connectionState.value = GlassesConnectionState.RECORDING
-        _deviceStatus.value = _deviceStatus.value.copy(isRecordingSpace = true)
-        sendGlassStatus("空间采集中")
-    }
-
-    override suspend fun pauseRecording() {
-        paused = true
+    override suspend fun stopRecording() {
+        _deviceStatus.value = _deviceStatus.value.copy(isRecordingTime = false)
         _connectionState.value = GlassesConnectionState.CONNECTED
-        sendGlassStatus("已暂停")
-    }
-
-    override suspend fun resumeRecording() {
-        paused = false
-        _connectionState.value = GlassesConnectionState.RECORDING
-        sendGlassStatus("记忆中")
-    }
-
-    override suspend fun stopRecording(sessionType: MemoryType) {
-        when (sessionType) {
-            MemoryType.TIME -> _deviceStatus.value = _deviceStatus.value.copy(isRecordingTime = false)
-            MemoryType.SPACE -> _deviceStatus.value = _deviceStatus.value.copy(isRecordingSpace = false)
-        }
-        val status = _deviceStatus.value
-        if (!status.isRecordingTime && !status.isRecordingSpace) {
-            stopPhotoLoop()
-            _connectionState.value = GlassesConnectionState.CONNECTED
-            sendGlassStatus("待机")
-        }
-    }
-
-    override suspend fun markKeyMoment() {
-        pendingKeyMoment.set(true)
-        triggerPhoto()
-    }
-
-    private fun startPhotoLoop(intervalMs: Long = BuildConfig.PHOTO_INTERVAL_MS) {
-        if (photoJob != null) return
-        photoJob = scope.launch {
-            triggerPhoto()
-            while (true) {
-                delay(intervalMs)
-                if (!paused) triggerPhoto()
-            }
-        }
-    }
-
-    private fun stopPhotoLoop() {
-        photoJob?.cancel(); photoJob = null
-    }
-
-    private fun triggerPhoto() {
-        val r = runCatching { cxrLink?.takePhoto(PHOTO_W, PHOTO_H, PHOTO_Q) }
-        if (r.isSuccess) EchoLog.i("触发眼镜拍照 takePhoto()")
-        else EchoLog.w("触发拍照失败: ${r.exceptionOrNull()?.message}")
+        sendGlassStatus("待机")
     }
 
     /** 向眼镜端 CustomApp 推送状态文案，在镜片显示（待机/记忆中/…）。 */
@@ -389,160 +313,83 @@ class CxrGlassesConnection(
         }
     }
 
-    override suspend fun sendGlassGuide(text: String) {
+    override suspend fun sendMemoryComplete(sid: String) {
         runCatching {
             cxrLink?.sendCustomCmd(
                 "rk_custom_client",
-                Caps().apply { write("guide"); write(text) },
-            )
-        }
-    }
-
-    override suspend fun sendGlassFeedback(text: String) {
-        runCatching {
-            cxrLink?.sendCustomCmd(
-                "rk_custom_client",
-                Caps().apply { write("feedback"); write(text) },
-            )
-        }
-    }
-
-    override suspend fun sendGlassLoopDone(angle: Float) {
-        runCatching {
-            cxrLink?.sendCustomCmd(
-                "rk_custom_client",
-                Caps().apply { write("loop_done"); write(angle.toInt().toString()) },
+                Caps().apply { write("memory_complete"); write(sid) },
             )
         }
     }
 
     // ---- SDK 回调 ----
 
-    private val audioCallback = object : IAudioStreamCbk {
-        override fun onAudioReceived(data: ByteArray?, offset: Int, length: Int) {
-            if (data == null || length <= 0) return
-            val safeOffset = if (offset in 0 until data.size) offset else 0
-            val maxAvailable = data.size - safeOffset
-            val safeLength = when {
-                length in 1..maxAvailable -> length
-                maxAvailable > 0 -> maxAvailable
-                else -> return
-            }
-            var emit: ByteArray? = null
-            synchronized(audioLock) {
-                audioBuffer.write(data, safeOffset, safeLength)
-                if (audioBuffer.size() >= AUDIO_CHUNK_BYTES) {
-                    emit = audioBuffer.toByteArray()
-                    audioBuffer.reset()
-                }
-            }
-            emit?.let {
-                EchoLog.i("眼镜音频块就绪 bytes=${it.size}")
-                _audioFlow.tryEmit(MediaAudio(it, System.currentTimeMillis()))
-            }
-        }
-
-        override fun onAudioError(errorCode: Int, errorInfo: String?) {
-            EchoLog.e("眼镜音频错误 code=$errorCode $errorInfo")
-        }
-
-        override fun onAudioStreamStateChanged(started: Boolean) {
-            Log.d(TAG, "audio stream started=$started")
-        }
-    }
-
-    private val imageCallback = object : IImageStreamCbk {
-        override fun onImageReceived(data: ByteArray?) {
-            if (data == null || data.isEmpty()) {
-                EchoLog.w("收到眼镜空帧")
-                return
-            }
-            val key = pendingKeyMoment.getAndSet(false)
-            EchoLog.i("收到眼镜帧 bytes=${data.size} key=$key")
-            _frameFlow.tryEmit(MediaFrame(data, System.currentTimeMillis(), key))
-        }
-
-        override fun onImageError(code: Int, msg: String?) {
-            EchoLog.e("眼镜图像错误 code=$code $msg")
-        }
-    }
-
     private val customCmdCallback = object : ICustomCmdCbk {
         override fun onCustomCmdResult(key: String?, payload: ByteArray?) {
-            EchoLog.i("收到眼镜自定义指令 key=$key payloadBytes=${payload?.size ?: 0}")
             if (key != "rk_custom_key" || payload == null) return
             val caps = runCatching { Caps.fromBytes(payload) }.getOrNull()
             if (caps == null) {
                 EchoLog.w("眼镜指令 Caps 解析失败")
                 return
             }
-            if (caps.size() >= 8 && "imu" == caps.at(0).let { if (it.type() == Caps.Value.TYPE_STRING) it.string else null }) {
-                val sample = parseImuSample(caps)
-                if (sample != null) _imuFlow.tryEmit(sample)
-                return
+            val tag = caps.at(0).let { if (it.type() == Caps.Value.TYPE_STRING) it.string else null }
+            when {
+                tag == "imu" && caps.size() >= 8 -> {
+                    val sample = parseImuSample(caps)
+                    if (sample != null) _imuFlow.tryEmit(sample)
+                }
+                tag == "video_chunk" && caps.size() >= 4 -> handleVideoChunk(caps)
+                tag == "video_patch" && caps.size() >= 4 -> handleVideoPatch(caps)
+                tag == "video_end" && caps.size() >= 3 -> handleVideoEnd(caps)
+                else -> {
+                    val command = parseCommand(caps)
+                    if (command == null) {
+                        EchoLog.w("眼镜指令无法识别为 START/STOP")
+                    } else {
+                        EchoLog.i("解析眼镜指令成功 ${command.type} scene=${command.scene} sid=${command.glassSid}")
+                        _commands.tryEmit(command)
+                    }
+                }
             }
-            if (caps.size() >= 3 && "video_chunk" == caps.at(0).let { if (it.type() == Caps.Value.TYPE_STRING) it.string else null }) { handleVideoChunk(caps); return }
-            if (caps.size() >= 2 && "video_end" == caps.at(0).let { if (it.type() == Caps.Value.TYPE_STRING) it.string else null }) { handleVideoEnd(caps); return }
-            val command = parseCommand(caps)
-            if (command == null) {
-                EchoLog.w("眼镜指令无法识别为 START/STOP")
-                return
-            }
-            EchoLog.i("解析眼镜指令成功 ${command.type} scene=${command.scene}")
-            _commands.tryEmit(command)
         }
     }
 
     /**
-     * 眼镜端约定：Caps = ["cmd", "START"|"STOP", (scene?)]。
-     * START 携带场景名（MEETING/ONSITE/QUALITY_TIME）；STOP 不带场景。
+     * 眼镜端约定：
+     * - Caps = ["cmd", "START"|"STOP", (scene?), (sid?)]。START 携带场景名与 sid；STOP 仅携带 sid。
+     * - Caps = ["video_chunk", sid, index, base64]，边录边发的视频分片。
+     * - Caps = ["video_patch", sid, offset, base64]，MediaRecorder 结束时回改的文件头覆盖，必须在 video_end 之前处理。
+     * - Caps = ["video_end", sid, filename]，视频录制结束。
      */
-
-    private data class VideoChunk(val fileName: String, val total: Int, val chunks: Array<ByteArray?>)
 
     private fun handleVideoChunk(caps: Caps) {
         try {
-            val fn = caps.at(1).string ?: return
+            val sid = caps.at(1).string ?: return
             val idx = caps.at(2).string?.toIntOrNull() ?: return
-            val total = caps.at(3).string?.toIntOrNull() ?: return
-            val b64 = caps.at(4).string ?: return
+            val b64 = caps.at(3).string ?: return
             val data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
-            val buf = videoBuffers.getOrPut(fn) { VideoChunk(fn, total, arrayOfNulls(total)) }
-            buf.chunks[idx] = data
-        } catch (e: Exception) { EchoLog.e("vc err: " + e.message, e) }
+            _videoChunkFlow.tryEmit(VideoChunk.Data(sid, idx, data))
+        } catch (e: Exception) { EchoLog.e("视频分片解析失败: " + e.message, e) }
+    }
+
+    private fun handleVideoPatch(caps: Caps) {
+        try {
+            val sid = caps.at(1).string ?: return
+            val offset = caps.at(2).string?.toLongOrNull() ?: return
+            val b64 = caps.at(3).string ?: return
+            val data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+            EchoLog.i("收到眼镜 video_patch sid=$sid offset=$offset bytes=${data.size}")
+            _videoChunkFlow.tryEmit(VideoChunk.Patch(sid, offset, data))
+        } catch (e: Exception) { EchoLog.e("video_patch 解析失败: " + e.message, e) }
     }
 
     private fun handleVideoEnd(caps: Caps) {
         try {
-            val fn = caps.at(1).string ?: return
-            val buf = videoBuffers.remove(fn) ?: return
-            if (buf.chunks.any { it == null }) { EchoLog.w("ve incomplete " + fn); return }
-            val sz = buf.chunks.sumOf { it!!.size }
-            val all = ByteArray(sz); var off = 0
-            for (c in buf.chunks) { System.arraycopy(c, 0, all, off, c!!.size); off += c.size }
-            EchoLog.i("ve ok " + fn + " " + all.size + "B")
-            val sid = if (caps.size() > 2) caps.at(2).string else ""
-            val sc = if (caps.size() > 3) caps.at(3).string else ""
-            val uploadSid = if (!sid.isNullOrBlank()) sid else "unknown"
-            val uploadScene = if (!sc.isNullOrBlank()) sc else "unknown"
-            Thread {
-                try {
-                    val client = OkHttpClient()
-                    val body = MultipartBody.Builder()
-                        .setType(MultipartBody.FORM)
-                        .addFormDataPart("sessionId", uploadSid)
-                        .addFormDataPart("scene", uploadScene)
-                        .addFormDataPart("video", fn, okhttp3.RequestBody.create("video/mp4".toMediaType(), all))
-                        .build()
-                    val u = BuildConfig.API_BASE_URL + "ingest/video"
-                    val req = okhttp3.Request.Builder().url(u).post(body).build()
-                    client.newCall(req).execute().use { r ->
-                        EchoLog.i("vu " + r.code + " " + fn)
-                        if (r.isSuccessful) { runCatching { cxrLink?.sendCustomCmd("rk_custom_client", Caps().apply { write("video_ack"); write(fn) }) } }
-                    }
-                } catch (e: Exception) { EchoLog.e("vu fail: " + e.message, e) }
-            }.start()
-        } catch (e: Exception) { EchoLog.e("ve err: " + e.message, e) }
+            val sid = caps.at(1).string ?: return
+            val filename = caps.at(2).string ?: "unknown.mp4"
+            EchoLog.i("收到眼镜 video_end sid=$sid filename=$filename")
+            _videoChunkFlow.tryEmit(VideoChunk.End(sid, filename))
+        } catch (e: Exception) { EchoLog.e("video_end 解析失败: " + e.message, e) }
     }
 
     private fun parseImuSample(caps: Caps): ImuSample? {
@@ -565,26 +412,22 @@ class CxrGlassesConnection(
             val v = caps.at(i)
             if (v.type() == Caps.Value.TYPE_STRING) v.string else null
         }
-        // 第一个值为标签 "cmd"，其后为指令与可选场景。
+        // 第一个值为标签 "cmd"，其后为指令、可选场景、可选 sid。
         val tokens = if (values.firstOrNull().equals("cmd", ignoreCase = true)) values.drop(1) else values
-        val type = when (tokens.getOrNull(0)?.uppercase()) {
-            "START" -> GlassCommandType.START
-            "STOP" -> GlassCommandType.STOP
-            else -> return null
+        return when (tokens.getOrNull(0)?.uppercase()) {
+            "START" -> {
+                val scene = tokens.getOrNull(1)?.let { name ->
+                    runCatching { TimeScene.valueOf(name.uppercase()) }.getOrNull()
+                }
+                val sid = tokens.getOrNull(2)
+                GlassCommand(GlassCommandType.START, scene, sid)
+            }
+            "STOP" -> {
+                val sid = tokens.getOrNull(1)
+                GlassCommand(GlassCommandType.STOP, null, sid)
+            }
+            else -> null
         }
-        val scene = tokens.getOrNull(1)?.let { name ->
-            runCatching { TimeScene.valueOf(name.uppercase()) }.getOrNull()
-        }
-        return GlassCommand(type, scene)
-    }
-
-    private fun flushAudio() {
-        val remaining: ByteArray?
-        synchronized(audioLock) {
-            remaining = if (audioBuffer.size() > 0) audioBuffer.toByteArray() else null
-            audioBuffer.reset()
-        }
-        remaining?.let { _audioFlow.tryEmit(MediaAudio(it, System.currentTimeMillis())) }
     }
 
     private val noopAppCbk = object : IGlassAppCbk {

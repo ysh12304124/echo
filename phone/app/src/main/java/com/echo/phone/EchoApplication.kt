@@ -15,12 +15,12 @@ import com.echo.phone.domain.DataPartition
 import com.echo.phone.domain.GlassCommand
 import com.echo.phone.domain.GlassCommandType
 import com.echo.phone.domain.GlassesConnectionState
-import com.echo.phone.domain.SpaceType
 import com.echo.phone.domain.TimeScene
 import com.echo.phone.util.EchoLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -51,17 +51,17 @@ class EchoApplication : Application() {
     val homeRefreshRequested: SharedFlow<Unit> = _homeRefreshRequested.asSharedFlow()
     fun requestHomeRefresh() { _homeRefreshRequested.tryEmit(Unit) }
 
-    // Space recording: phone needs to pick scene type before starting
-    private val _pendingSpaceStart = MutableSharedFlow<Pair<GlassCommand, (SpaceType) -> Unit>>(extraBufferCapacity = 1)
-    val pendingSpaceStart: SharedFlow<Pair<GlassCommand, (SpaceType) -> Unit>> = _pendingSpaceStart.asSharedFlow()
+    // 当前正在记忆的场景；null 表示未在记忆中。
+    private val _activeScene = MutableStateFlow<TimeScene?>(null)
+    val activeScene: StateFlow<TimeScene?> = _activeScene.asStateFlow()
 
-    private val _currentRecordingType = MutableStateFlow<RecordingType>(RecordingType.NONE)
-    val currentRecordingType: StateFlow<RecordingType> = _currentRecordingType.asStateFlow()
-
-    enum class RecordingType { NONE, TIME, SPACE }
+    // 记忆刚结束的场景，用于 UI 显示"xxx记忆结束"3秒后自动清除。
+    private val _justCompletedScene = MutableStateFlow<TimeScene?>(null)
+    val justCompletedScene: StateFlow<TimeScene?> = _justCompletedScene.asStateFlow()
 
     override fun onCreate() {
         super.onCreate()
+        EchoLog.init(this)
         repository = EchoRepository(ApiClient.service)
         glassesConnection = if (BuildConfig.USE_MOCK_GLASSES) {
             MockGlassesConnection(appScope)
@@ -101,14 +101,7 @@ class EchoApplication : Application() {
         appScope.launch {
             glassesConnection.commands.collect { command ->
                 when (command.type) {
-                    GlassCommandType.START -> {
-                        if (command.scene == TimeScene.SPACE) {
-                            // Space needs user to pick scene type first
-                            _pendingSpaceStart.emit(command to { spaceType -> confirmSpaceStart(command, spaceType) })
-                        } else {
-                            handleStart(command)
-                        }
-                    }
+                    GlassCommandType.START -> handleStart(command)
                     GlassCommandType.STOP -> handleStop()
                 }
             }
@@ -124,13 +117,7 @@ class EchoApplication : Application() {
         }
     }
 
-    private fun confirmSpaceStart(command: GlassCommand, spaceType: SpaceType) {
-        appScope.launch {
-            handleStart(command, spaceType)
-        }
-    }
-
-    private suspend fun handleStart(command: GlassCommand, spaceType: SpaceType? = null) {
+    private suspend fun handleStart(command: GlassCommand) {
         if (!isRecording.compareAndSet(false, true)) {
             EchoLog.w("收到眼镜START但已在录制中，忽略")
             return
@@ -138,21 +125,15 @@ class EchoApplication : Application() {
         val scene = command.scene ?: TimeScene.MEETING
         val partition =
             if (scene == TimeScene.QUALITY_TIME) DataPartition.QUALITY_TIME else DataPartition.WORK
-        EchoLog.i("收到眼镜START scene=$scene partition=$partition -> 开始录制")
+        EchoLog.i("收到眼镜START scene=$scene partition=$partition sid=${command.glassSid} -> 开始录制")
         try {
-            if (scene == TimeScene.SPACE) {
-                val st = spaceType ?: SpaceType.LARGE_SCENE
-                _currentRecordingType.value = RecordingType.SPACE
-                val id = recordingController.startSpace(st, partition, "${st.label} 空间记忆")
-                EchoLog.i("空间录制已启动，后台 session=$id")
-            } else {
-                _currentRecordingType.value = RecordingType.TIME
-                val id = recordingController.startTime(scene, partition, "${scene.name} 记录")
-                EchoLog.i("录制已启动，后台 session=$id")
-            }
+            _activeScene.value = scene
+            _justCompletedScene.value = null
+            val id = recordingController.startTime(scene, partition, "${scene.name} 记录", command.glassSid)
+            EchoLog.i("录制已启动，后台 session=$id")
         } catch (e: Exception) {
             isRecording.set(false)
-            _currentRecordingType.value = RecordingType.NONE
+            _activeScene.value = null
             EchoLog.e("开始录制失败: ${e.message}", e)
         }
     }
@@ -164,8 +145,8 @@ class EchoApplication : Application() {
         }
         val wasDisconnect = disconnectStop
         disconnectStop = false
-        val recType = _currentRecordingType.value
-        _currentRecordingType.value = RecordingType.NONE
+        val recScene = _activeScene.value
+        _activeScene.value = null
         EchoLog.i("收到眼镜STOP -> 结束并上传")
         try {
             val summary = recordingController.stopAndComplete()
@@ -174,6 +155,12 @@ class EchoApplication : Application() {
             if (wasDisconnect) notifyDisconnectStop()
         } catch (e: Exception) {
             EchoLog.e("结束/上传失败: ${e.message}", e)
+        } finally {
+            _justCompletedScene.value = recScene
+            appScope.launch {
+                delay(3000)
+                if (_justCompletedScene.value == recScene) _justCompletedScene.value = null
+            }
         }
     }
 

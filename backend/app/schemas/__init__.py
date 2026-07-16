@@ -85,17 +85,6 @@ class LoopDetectResponse(BaseModel):
     confidence: float
 
 
-class FrameImageResponse(BaseModel):
-    filename: str
-    media_url: str
-
-
-class FrameImageListResponse(BaseModel):
-    session_id: UUID
-    items: list[FrameImageResponse] = Field(default_factory=list)
-    total: int
-
-
 class MemorySummaryResponse(BaseModel):
     memory_id: UUID
     memory_type: MemoryType

@@ -182,6 +182,25 @@ private fun BreathingDot(isActive: Boolean, color: Color = Color(0xFFEF4444)) {
     )
 }
 
+// ── 上传状态小标签：视频/音频/IMU 上传中 → 上传结束 ──
+@Composable
+private fun UploadChip(label: String, done: Boolean) {
+    val bg = if (done) Color(0xFFECFDF5) else Color(0xFFEFF6FF)
+    val fg = if (done) Color(0xFF059669) else Color(0xFF2563EB)
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(bg)
+            .padding(horizontal = 10.dp, vertical = 5.dp)
+    ) {
+        Text(
+            "$label${if (done) "上传结束" else "上传中"}",
+            style = MaterialTheme.typography.labelSmall,
+            color = fg,
+        )
+    }
+}
+
 // ── 骨架 ──
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -209,6 +228,7 @@ fun HomeScreen(
         override fun <T : ViewModel> create(cls: Class<T>): T = HomeViewModel(app.repository, app.glassesConnection, partitionFilter) as T
     })
     val ds by vm.deviceStatus.collectAsState()
+    val uploadStatus by app.recordingController.uploadStatus.collectAsState()
     val rawMemories = vm.memories
     val displayMemories = remember(rawMemories, favoritesOnly) {
         if (favoritesOnly) rawMemories.filter { it.isFavorited } else rawMemories
@@ -247,20 +267,38 @@ fun HomeScreen(
         }
         Spacer(Modifier.height(12.dp))
 
-        // 设备状态
+        // 设备状态：连接状态 / 记忆场景状态 / 上传状态栏，三段独立展示，互不覆盖。
         Box(Modifier.fillMaxWidth().shadow(8.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(GlassBgElevated).border(1.dp, GlassBorderElevated, RoundedCornerShape(18.dp)).padding(16.dp)) {
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // 1. 眼镜连接状态
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (ds.connected) Color(0xFF10B981) else Color(0xFFD1D5DB)))
+                    Spacer(Modifier.width(10.dp))
+                    val connText = if (ds.connected) "眼镜已连接 · 电量 ${ds.batteryPercent}%" else "未连接"
+                    Text(connText, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    if (!ds.connected) FilledTonalButton(onClick = { vm.connectGlasses() }, modifier = Modifier.height(34.dp)) { Text("连接眼镜") }
+                }
+
+                // 2. 记忆场景状态
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     BreathingDot(isRec, sceneAccent(activeScene).takeIf { isRec } ?: Color(0xFFEF4444))
                     Spacer(Modifier.width(10.dp))
-                    val statusText = when {
-                        activeScene != null -> "${sceneLabel(activeScene)}记忆中"
+                    val sceneText = when {
+                        activeScene != null && ds.isRecordingSpace -> "${sceneLabel(activeScene)}时间记忆中，3D记忆已开启"
+                        activeScene != null -> "${sceneLabel(activeScene)}时间记忆中"
                         justCompletedScene != null -> "${sceneLabel(justCompletedScene)}记忆结束"
-                        ds.connected -> "眼镜已连接 · 电量 ${ds.batteryPercent}%"
-                        else -> "未连接"
+                        else -> "记忆未开启"
                     }
-                    Text(statusText, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    if (!ds.connected) FilledTonalButton(onClick = { vm.connectGlasses() }, modifier = Modifier.height(34.dp)) { Text("连接") }
+                    Text(sceneText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f))
+                }
+
+                // 3. 上传状态栏：仅记忆进行中(含收尾上传)时展示，全部完成后延迟隐藏。
+                AnimatedVisibility(visible = uploadStatus.visible) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        UploadChip("视频", uploadStatus.videoDone)
+                        UploadChip("音频", uploadStatus.audioDone)
+                        if (uploadStatus.spaceEnabled) UploadChip("IMU", uploadStatus.imuDone)
+                    }
                 }
             }
         }

@@ -7,9 +7,21 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicInteger
+
+/** 首页"上传状态"栏展示用：本次记忆各类数据的上传进度，全部结束一段时间后 [visible] 转 false 自动隐藏。 */
+data class UploadStatus(
+    val visible: Boolean = false,
+    val spaceEnabled: Boolean = false,
+    val videoDone: Boolean = false,
+    val audioDone: Boolean = false,
+    val imuDone: Boolean = false,
+)
 
 /**
  * 记忆录制编排：场景 START 后同时收集视频分片(不落地转发)、手机麦克风音频、IMU(空间记忆开启时)。
@@ -31,9 +43,28 @@ class RecordingController(
     private val pendingImuBatch = mutableListOf<ImuSample>()
 
     @Volatile private var videoDone = false
+    @Volatile private var micStopped = false
+    @Volatile private var imuStopped = false
+    @Volatile private var spaceUsedInSession = false
+    @Volatile private var uploadBarVisible = false
     private val pendingUploads = AtomicInteger(0)
+    private val pendingAudioUploads = AtomicInteger(0)
+    private val pendingImuUploads = AtomicInteger(0)
+
+    private val _uploadStatus = MutableStateFlow(UploadStatus())
+    val uploadStatus: StateFlow<UploadStatus> = _uploadStatus.asStateFlow()
 
     val currentSessionId: String? get() = sessionId
+
+    private fun publishUploadStatus() {
+        _uploadStatus.value = UploadStatus(
+            visible = uploadBarVisible,
+            spaceEnabled = spaceUsedInSession,
+            videoDone = videoDone,
+            audioDone = micStopped && pendingAudioUploads.get() == 0,
+            imuDone = imuStopped && pendingImuUploads.get() == 0,
+        )
+    }
 
     suspend fun startTime(scene: TimeScene, partition: DataPartition, title: String, glassSid: String?): String {
         val id = repo.startSession(MemoryType.TIME, scene, partition, title)
@@ -41,6 +72,13 @@ class RecordingController(
         sessionId = id
         this.glassSid = glassSid
         videoDone = false
+        micStopped = false
+        imuStopped = false
+        spaceUsedInSession = false
+        uploadBarVisible = true
+        pendingAudioUploads.set(0)
+        pendingImuUploads.set(0)
+        publishUploadStatus()
         collectImu(id)
         collectVideo(id)
         startMic(id)
@@ -51,11 +89,12 @@ class RecordingController(
     private fun collectImu(id: String) {
         imuJob = scope.launch {
             glasses.imuFlow.collect { imu ->
+                if (!spaceUsedInSession) { spaceUsedInSession = true; publishUploadStatus() }
                 val chunk = synchronized(imuBatchLock) {
                     pendingImuBatch += imu
                     if (pendingImuBatch.size >= 25) pendingImuBatch.toList().also { pendingImuBatch.clear() } else null
                 }
-                if (chunk != null) uploadTracked { uploadImuBatch(id, chunk) }
+                if (chunk != null) uploadImuTracked { uploadImuBatch(id, chunk) }
             }
         }
     }
@@ -81,6 +120,7 @@ class RecordingController(
                         if (glassSid != null && chunk.streamId != glassSid) return@collect
                         uploadVideoSequential { repo.uploadVideoChunk(id, -1, true, chunk.filename, ByteArray(0)) }
                         videoDone = true
+                        publishUploadStatus()
                         EchoLog.i("视频分片接收完毕 session=$id filename=${chunk.filename}")
                     }
                 }
@@ -96,16 +136,24 @@ class RecordingController(
 
     private fun startMic(id: String) {
         micJob = scope.launch {
-            mic.audioFlow.collect { audio -> uploadTracked { repo.uploadAudio(id, audio) } }
+            mic.audioFlow.collect { audio -> uploadAudioTracked { repo.uploadAudio(id, audio) } }
         }
         if (!mic.start()) EchoLog.w("手机麦克风启动失败，本次记忆将缺失音频 session=$id")
     }
 
-    private fun uploadTracked(block: suspend () -> Unit) {
-        pendingUploads.incrementAndGet()
+    private fun uploadAudioTracked(block: suspend () -> Unit) {
+        pendingUploads.incrementAndGet(); pendingAudioUploads.incrementAndGet()
         scope.launch {
-            try { block() } catch (e: Exception) { EchoLog.e("上传失败: ${e.message}", e) }
-            finally { pendingUploads.decrementAndGet() }
+            try { block() } catch (e: Exception) { EchoLog.e("音频上传失败: ${e.message}", e) }
+            finally { pendingUploads.decrementAndGet(); pendingAudioUploads.decrementAndGet(); publishUploadStatus() }
+        }
+    }
+
+    private fun uploadImuTracked(block: suspend () -> Unit) {
+        pendingUploads.incrementAndGet(); pendingImuUploads.incrementAndGet()
+        scope.launch {
+            try { block() } catch (e: Exception) { EchoLog.e("IMU上传失败: ${e.message}", e) }
+            finally { pendingUploads.decrementAndGet(); pendingImuUploads.decrementAndGet(); publishUploadStatus() }
         }
     }
 
@@ -127,20 +175,29 @@ class RecordingController(
         imuJob?.cancelAndJoin(); imuJob = null
         videoJob?.cancelAndJoin(); videoJob = null
         micJob?.cancelAndJoin(); micJob = null
+        micStopped = true
+        imuStopped = true
 
         val tailImu = synchronized(imuBatchLock) {
             pendingImuBatch.toList().also { pendingImuBatch.clear() }
         }
         if (tailImu.isNotEmpty()) uploadImuBatch(id, tailImu)
+        publishUploadStatus() // 此时视频/音频/IMU 均已排空，各项应已全部转为"上传结束"
 
         val summary = repo.completeSession(id)
         val sidForGlass = glassSid ?: id
         runCatching { glasses.sendMemoryComplete(sidForGlass) }
         sessionId = null; glassSid = null
+        scope.launch {
+            delay(UPLOAD_BAR_LINGER_MS) // 让用户看到"上传结束"提示后再隐藏上传状态栏
+            uploadBarVisible = false
+            publishUploadStatus()
+        }
         return summary
     }
 
     private companion object {
         const val UPLOAD_DRAIN_TIMEOUT_MS = 15_000L
+        const val UPLOAD_BAR_LINGER_MS = 2_000L
     }
 }

@@ -83,6 +83,8 @@ class MainActivity : AppCompatActivity() {
         if (spaceOn) { startImuSensors(); imuHandler.postDelayed(imuTask, IMU_INTERVAL_MS) }
         else { imuHandler.removeCallbacks(imuTask); stopImuSensors() }
         Log.i(TAG, "space memory = $spaceOn")
+        // 主动上报开关状态，供手机端实时展示"3D记忆已开启/关闭"，不依赖 IMU 数据流的到达间接推断。
+        upExec.execute { bridge.sendMessage(CMD_KEY, Caps().apply { write("space_state"); write(if (spaceOn) "on" else "off") }) }
         render()
     }
 
@@ -126,7 +128,7 @@ class MainActivity : AppCompatActivity() {
             addAction(KeyType.CLICK.action)
             addAction(KeyType.TWO_FINGER_SWIPE_FORWARD.action)
             addAction(KeyType.TWO_FINGER_SWIPE_BACK.action)
-            addAction(KeyType.TWO_FINGER_SINGLE_TAP.action)
+            addAction(KeyType.TWO_FINGER_DOUBLE_TAP.action)
         })
         render()
         Log.i(TAG, "Echo start")
@@ -171,8 +173,8 @@ class MainActivity : AppCompatActivity() {
             KeyType.CLICK -> if (rec) stop() else start()
             KeyType.TWO_FINGER_SWIPE_FORWARD -> cycle(1)
             KeyType.TWO_FINGER_SWIPE_BACK -> cycle(-1)
-            // 双击(DOUBLE_CLICK)被系统占用为退出当前程序,长按被系统AI助手占用,改用双指单击切换空间记忆。
-            KeyType.TWO_FINGER_SINGLE_TAP -> toggleSpace()
+            // 双击(DOUBLE_CLICK)被系统占用为退出当前程序,长按被系统AI助手占用,双指单击实测难触发,改用双指双击切换空间记忆。
+            KeyType.TWO_FINGER_DOUBLE_TAP -> toggleSpace()
             else -> {}
         }
     }
@@ -197,7 +199,7 @@ class MainActivity : AppCompatActivity() {
         val cc = mapOf(0 to "#10B981", 1 to "#2563EB", 2 to "#7C3AED")
         sv.forEachIndexed{i,tv->val a=i==sel; tv.setTextColor(if(rec&&a||a)Color.WHITE else if(rec)Color.parseColor("#555555") else Color.parseColor("#AAAAAA")); tv.setBackgroundColor(if(rec&&a||a)Color.parseColor(cc[i]?:("#3D5AFE")) else Color.TRANSPARENT); tv.isEnabled=!rec||a}
         st.text=if(rec)"记忆中 · ${scenes[sel].label}" else "待机 · ${scenes[sel].label}"
-        ht.text=if(rec)"单击结束记忆" else "滑动切换场景 · 单击启动记忆 · 双指单击切换空间记忆"
+        ht.text=if(rec)"单击结束记忆" else "滑动切换场景 · 单击启动记忆 · 双指双击切换空间记忆"
         spaceTag.text=if(spaceOn)"空间记忆启动，imu记录中" else "空间记忆"
         spaceTag.setTextColor(if(spaceOn)Color.parseColor("#F59E0B") else Color.parseColor("#555555"))
     }

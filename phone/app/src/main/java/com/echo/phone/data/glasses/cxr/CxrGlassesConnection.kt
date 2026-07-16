@@ -271,7 +271,7 @@ class CxrGlassesConnection(
         scope.launch {
             CxrLinkHub.btConnected.collect { bt ->
                 if (!bt && _connectionState.value != GlassesConnectionState.DISCONNECTED) {
-                    _deviceStatus.value = _deviceStatus.value.copy(connected = false)
+                    _deviceStatus.value = _deviceStatus.value.copy(connected = false, isRecordingSpace = false)
                     _connectionState.value = GlassesConnectionState.DISCONNECTED
                 }
             }
@@ -285,7 +285,8 @@ class CxrGlassesConnection(
         cxrLink = null
         CxrLinkHub.reset()
         _connectionState.value = GlassesConnectionState.DISCONNECTED
-        _deviceStatus.value = DeviceStatus(connected = false)
+        // 断连后眼镜端空间记忆开关状态未知，清零避免首页残留"3D记忆已开启"的过期文案。
+        _deviceStatus.value = DeviceStatus(connected = false, isRecordingSpace = false)
     }
 
     // ---- 录制控制 ----
@@ -341,6 +342,7 @@ class CxrGlassesConnection(
                 tag == "video_chunk" && caps.size() >= 4 -> handleVideoChunk(caps)
                 tag == "video_patch" && caps.size() >= 4 -> handleVideoPatch(caps)
                 tag == "video_end" && caps.size() >= 3 -> handleVideoEnd(caps)
+                tag == "space_state" && caps.size() >= 2 -> handleSpaceState(caps)
                 else -> {
                     val command = parseCommand(caps)
                     if (command == null) {
@@ -390,6 +392,16 @@ class CxrGlassesConnection(
             EchoLog.i("收到眼镜 video_end sid=$sid filename=$filename")
             _videoChunkFlow.tryEmit(VideoChunk.End(sid, filename))
         } catch (e: Exception) { EchoLog.e("video_end 解析失败: " + e.message, e) }
+    }
+
+    /** 眼镜端双指双击切换空间记忆时主动上报开关状态，驱动首页"3D记忆已开启/关闭"文案实时更新。 */
+    private fun handleSpaceState(caps: Caps) {
+        try {
+            val state = caps.at(1).string ?: return
+            val on = state == "on"
+            EchoLog.i("空间记忆状态变化: $state")
+            _deviceStatus.value = _deviceStatus.value.copy(isRecordingSpace = on)
+        } catch (e: Exception) { EchoLog.e("space_state 解析失败: " + e.message, e) }
     }
 
     private fun parseImuSample(caps: Caps): ImuSample? {

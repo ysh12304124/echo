@@ -215,6 +215,8 @@ fun HomeScreen(
         app.deletedMemoryId.collect { id -> vm.pendingDeleteId = id }
     }
 
+    // 自动重连: app 启动时如果蓝牙/眼镜可能已连, 尝试建 CXR 会话
+    LaunchedEffect(Unit) { vm.connectGlasses() }
     val recType by app.currentRecordingType.collectAsState()
     val isRec = recType != EchoApplication.RecordingType.NONE
 

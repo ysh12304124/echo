@@ -20,6 +20,9 @@ import com.rokid.cxr.link.utils.CxrDefs
 import com.rokid.sprite.aiapp.externalapp.auth.AuthResult
 import com.rokid.sprite.aiapp.externalapp.auth.AuthorizationHelper
 import com.rokid.sprite.aiapp.externalapp.auth.GlassPermission
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -88,6 +91,7 @@ class CxrGlassesConnection(
     override val commands = _commands.asSharedFlow()
 
     private var cxrLink: CXRLink? = null
+    private var connecting = false
     private var activityRef: WeakReference<Activity>? = null
     private var authDeferred: CompletableDeferred<String>? = null
 
@@ -96,6 +100,7 @@ class CxrGlassesConnection(
     private val pendingKeyMoment = AtomicBoolean(false)
     private val audioBuffer = ByteArrayOutputStream()
     private val audioLock = Any()
+    private val videoBuffers = java.util.HashMap<String, VideoChunk>()
 
     // CustomApp 会话生命周期（来自 ICXRSessionCbk）：available=眼镜侧就绪可拉起；started=CustomApp 已连接、指令通道就绪。
     private val sessionAvailable = MutableStateFlow(false)
@@ -144,6 +149,8 @@ class CxrGlassesConnection(
     // ---- 连接生命周期 ----
 
     override suspend fun connect() {
+        if (connecting) { EchoLog.w("already connecting"); return }
+        connecting = true
         val activity = activityRef?.get()
             ?: throw GlassesConnectionException("请在 Echo 应用前台发起连接")
         if (!AuthorizationHelper.isRequiredRokidAppInstalled(activity) &&
@@ -163,12 +170,14 @@ class CxrGlassesConnection(
             ensureGlassAppRunning()
             registerCapabilityCallbacks()
             EchoLog.i("已注册音频/图像/自定义指令回调，眼镜连接完成")
+        connecting = false
             _connectionState.value = GlassesConnectionState.CONNECTED
             _deviceStatus.value = DeviceStatus(connected = true, batteryPercent = CxrLinkHub.batteryPercent.value)
             observeDeviceState()
             sendGlassStatus("待机")
         } catch (e: Exception) {
             EchoLog.e("连接眼镜失败: ${e.message}", e)
+            connecting = false
             _connectionState.value = GlassesConnectionState.DISCONNECTED
             _deviceStatus.value = DeviceStatus(connected = false)
             throw if (e is GlassesConnectionException) e
@@ -472,6 +481,8 @@ class CxrGlassesConnection(
                 if (sample != null) _imuFlow.tryEmit(sample)
                 return
             }
+            if (caps.size() >= 3 && "video_chunk" == caps.at(0).let { if (it.type() == Caps.Value.TYPE_STRING) it.string else null }) { handleVideoChunk(caps); return }
+            if (caps.size() >= 2 && "video_end" == caps.at(0).let { if (it.type() == Caps.Value.TYPE_STRING) it.string else null }) { handleVideoEnd(caps); return }
             val command = parseCommand(caps)
             if (command == null) {
                 EchoLog.w("眼镜指令无法识别为 START/STOP")
@@ -486,6 +497,54 @@ class CxrGlassesConnection(
      * 眼镜端约定：Caps = ["cmd", "START"|"STOP", (scene?)]。
      * START 携带场景名（MEETING/ONSITE/QUALITY_TIME）；STOP 不带场景。
      */
+
+    private data class VideoChunk(val fileName: String, val total: Int, val chunks: Array<ByteArray?>)
+
+    private fun handleVideoChunk(caps: Caps) {
+        try {
+            val fn = caps.at(1).string ?: return
+            val idx = caps.at(2).string?.toIntOrNull() ?: return
+            val total = caps.at(3).string?.toIntOrNull() ?: return
+            val b64 = caps.at(4).string ?: return
+            val data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+            val buf = videoBuffers.getOrPut(fn) { VideoChunk(fn, total, arrayOfNulls(total)) }
+            buf.chunks[idx] = data
+        } catch (e: Exception) { EchoLog.e("vc err: " + e.message, e) }
+    }
+
+    private fun handleVideoEnd(caps: Caps) {
+        try {
+            val fn = caps.at(1).string ?: return
+            val buf = videoBuffers.remove(fn) ?: return
+            if (buf.chunks.any { it == null }) { EchoLog.w("ve incomplete " + fn); return }
+            val sz = buf.chunks.sumOf { it!!.size }
+            val all = ByteArray(sz); var off = 0
+            for (c in buf.chunks) { System.arraycopy(c, 0, all, off, c!!.size); off += c.size }
+            EchoLog.i("ve ok " + fn + " " + all.size + "B")
+            val sid = if (caps.size() > 2) caps.at(2).string else ""
+            val sc = if (caps.size() > 3) caps.at(3).string else ""
+            val uploadSid = if (!sid.isNullOrBlank()) sid else "unknown"
+            val uploadScene = if (!sc.isNullOrBlank()) sc else "unknown"
+            Thread {
+                try {
+                    val client = OkHttpClient()
+                    val body = MultipartBody.Builder()
+                        .setType(MultipartBody.FORM)
+                        .addFormDataPart("sessionId", uploadSid)
+                        .addFormDataPart("scene", uploadScene)
+                        .addFormDataPart("video", fn, okhttp3.RequestBody.create("video/mp4".toMediaType(), all))
+                        .build()
+                    val u = BuildConfig.API_BASE_URL + "ingest/video"
+                    val req = okhttp3.Request.Builder().url(u).post(body).build()
+                    client.newCall(req).execute().use { r ->
+                        EchoLog.i("vu " + r.code + " " + fn)
+                        if (r.isSuccessful) { runCatching { cxrLink?.sendCustomCmd("rk_custom_client", Caps().apply { write("video_ack"); write(fn) }) } }
+                    }
+                } catch (e: Exception) { EchoLog.e("vu fail: " + e.message, e) }
+            }.start()
+        } catch (e: Exception) { EchoLog.e("ve err: " + e.message, e) }
+    }
+
     private fun parseImuSample(caps: Caps): ImuSample? {
         return try {
             val values = (0 until caps.size()).mapNotNull { i ->

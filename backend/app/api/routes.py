@@ -543,6 +543,9 @@ async def delete_space(space_id: UUID, repo: MemoryRepository = Depends(get_repo
     if space.model_url:
         key = space.model_url.split("/media/", 1)[-1]
         await blob.delete(key)
+        model_dir = key.rsplit("/", 1)[0]
+        await blob.delete(model_dir + "/poses.txt")
+        await blob.delete(model_dir + "/anchor.json")
     await repo.delete_space_memory(space_id)
 
 

@@ -147,6 +147,13 @@ class EchoApplication : Application() {
         disconnectStop = false
         val recScene = _activeScene.value
         _activeScene.value = null
+        // "xxx记忆结束" 状态不等视频/音频/IMU上传结束，收到 STOP 就立刻切换；
+        // 上传进度由 RecordingController.uploadStatus 单独驱动的上传状态栏展示。
+        _justCompletedScene.value = recScene
+        appScope.launch {
+            delay(3000)
+            if (_justCompletedScene.value == recScene) _justCompletedScene.value = null
+        }
         EchoLog.i("收到眼镜STOP -> 结束并上传")
         try {
             val summary = recordingController.stopAndComplete()
@@ -155,12 +162,6 @@ class EchoApplication : Application() {
             if (wasDisconnect) notifyDisconnectStop()
         } catch (e: Exception) {
             EchoLog.e("结束/上传失败: ${e.message}", e)
-        } finally {
-            _justCompletedScene.value = recScene
-            appScope.launch {
-                delay(3000)
-                if (_justCompletedScene.value == recScene) _justCompletedScene.value = null
-            }
         }
     }
 

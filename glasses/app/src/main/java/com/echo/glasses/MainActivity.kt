@@ -30,6 +30,8 @@ class MainActivity : AppCompatActivity() {
         const val CLIENT_KEY = "rk_custom_client"
         const val CHUNK = 50 * 1024
         const val IMU_INTERVAL_MS = 1000L
+        const val MAX_SEND_RETRY = 5
+        const val SEND_RETRY_DELAY_MS = 150L
     }
 
     private enum class Scene(val cmd: String, val label: String) {
@@ -76,7 +78,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun startImuSensors() { if (ia) return; ac=sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER); gy=sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE); if(ac==null||gy==null){Log.w(TAG,"no IMU");return}; sm.registerListener(il,ac,SensorManager.SENSOR_DELAY_GAME); sm.registerListener(il,gy,SensorManager.SENSOR_DELAY_GAME); ia=true }
     private fun stopImuSensors() { if(!ia)return; sm.unregisterListener(il); ia=false }
-    private fun sendImu() { if(!spaceOn||!ia||!conn)return; bridge.sendMessage(CMD_KEY, Caps().apply { write("imu"); write(lax.toString()); write(lay.toString()); write(laz.toString()); write(lgx.toString()); write(lgy.toString()); write(lgz.toString()); write(System.currentTimeMillis().toString()) }) }
+    // sendImu 由主线程 Handler 定时触发，sendCmd 内部可能 sleep 重试，必须丢到 upExec 后台线程执行，避免阻塞主线程/UI。
+    private fun sendImu() { if(!spaceOn||!ia||!conn)return; val caps = Caps().apply { write("imu"); write(lax.toString()); write(lay.toString()); write(laz.toString()); write(lgx.toString()); write(lgy.toString()); write(lgz.toString()); write(System.currentTimeMillis().toString()) }; upExec.execute { sendCmd(caps, "imu") } }
 
     private fun toggleSpace() {
         spaceOn = !spaceOn
@@ -84,7 +87,7 @@ class MainActivity : AppCompatActivity() {
         else { imuHandler.removeCallbacks(imuTask); stopImuSensors() }
         Log.i(TAG, "space memory = $spaceOn")
         // 主动上报开关状态，供手机端实时展示"3D记忆已开启/关闭"，不依赖 IMU 数据流的到达间接推断。
-        upExec.execute { bridge.sendMessage(CMD_KEY, Caps().apply { write("space_state"); write(if (spaceOn) "on" else "off") }) }
+        upExec.execute { sendCmd(Caps().apply { write("space_state"); write(if (spaceOn) "on" else "off") }, "space_state") }
         render()
     }
 
@@ -112,6 +115,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState); setContentView(R.layout.activity_main)
+        // 屏幕息屏会触发 CXR 会话 onSessionPause(SESSION_SCREEN_OFF)，导致录制过程中指令通道被打断，
+        // 常驻常亮以降低该情况出现概率（用于排查"眼镜发了但手机没收到"问题）。
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         sm = getSystemService(SENSOR_SERVICE) as SensorManager
         vr = VideoRecorder(this).apply {
             onChunk = { bytes -> sendVideoChunk(bytes) }
@@ -128,7 +134,7 @@ class MainActivity : AppCompatActivity() {
             addAction(KeyType.CLICK.action)
             addAction(KeyType.TWO_FINGER_SWIPE_FORWARD.action)
             addAction(KeyType.TWO_FINGER_SWIPE_BACK.action)
-            addAction(KeyType.TWO_FINGER_DOUBLE_TAP.action)
+            addAction(KeyType.TWO_FINGER_LONG_PRESS.action)
         })
         render()
         Log.i(TAG, "Echo start")
@@ -146,7 +152,7 @@ class MainActivity : AppCompatActivity() {
                 val end = minOf(offset + CHUNK, bytes.size)
                 val b64 = Base64.encodeToString(bytes, offset, end - offset, Base64.NO_WRAP)
                 val idx = videoChunkIndex++
-                bridge.sendMessage(CMD_KEY, Caps().apply { write("video_chunk"); write(sid); write(idx.toString()); write(b64) })
+                sendCmd(Caps().apply { write("video_chunk"); write(sid); write(idx.toString()); write(b64) }, "video_chunk#$idx")
                 offset = end
             }
         }
@@ -156,14 +162,14 @@ class MainActivity : AppCompatActivity() {
     private fun sendVideoPatch(bytes: ByteArray) {
         upExec.execute {
             val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-            bridge.sendMessage(CMD_KEY, Caps().apply { write("video_patch"); write(sid); write("0"); write(b64) })
+            sendCmd(Caps().apply { write("video_patch"); write(sid); write("0"); write(b64) }, "video_patch")
             Log.i(TAG, "video_patch sent: ${bytes.size} bytes")
         }
     }
 
     private fun sendVideoEnd(filename: String) {
         upExec.execute {
-            bridge.sendMessage(CMD_KEY, Caps().apply { write("video_end"); write(sid); write(filename) })
+            sendCmd(Caps().apply { write("video_end"); write(sid); write(filename) }, "video_end")
             Log.i(TAG, "video_end sent: $filename chunks=$videoChunkIndex")
         }
     }
@@ -173,25 +179,44 @@ class MainActivity : AppCompatActivity() {
             KeyType.CLICK -> if (rec) stop() else start()
             KeyType.TWO_FINGER_SWIPE_FORWARD -> cycle(1)
             KeyType.TWO_FINGER_SWIPE_BACK -> cycle(-1)
-            // 双击(DOUBLE_CLICK)被系统占用为退出当前程序,长按被系统AI助手占用,双指单击实测难触发,改用双指双击切换空间记忆。
-            KeyType.TWO_FINGER_DOUBLE_TAP -> toggleSpace()
+            // 双击(DOUBLE_CLICK)被系统占用为退出当前程序,单指长按被系统AI助手占用,双指单击实测难触发,双指双击也不理想,改用双指长按切换空间记忆。
+            KeyType.TWO_FINGER_LONG_PRESS -> toggleSpace()
             else -> {}
         }
     }
+    /** 统一发送并记录 CXRServiceBridge.sendMessage 的返回码。实测 ret=-3 集中出现在系统AI/息屏
+     * 抢占本应用前台(CXR会话SESSION_AI_START/SESSION_SCREEN_OFF)期间——此时底层指令通道未就绪，
+     * 是"短暂性"失败，恢复前台后通常能恢复发送。因此这里做有限次数的阻塞重试再放弃，避免一次抢占
+     * 就永久丢失若干视频分片。必须在后台线程(upExec)调用，不可在主线程调用(内部会 sleep)。 */
+    private fun sendCmd(caps: Caps, label: String) {
+        var ret = bridge.sendMessage(CMD_KEY, caps)
+        var attempt = 0
+        while (ret != 0 && attempt < MAX_SEND_RETRY) {
+            attempt++
+            Log.w(TAG, "$label sendMessage ret=$ret，${SEND_RETRY_DELAY_MS}ms 后重试(第${attempt}次)")
+            try { Thread.sleep(SEND_RETRY_DELAY_MS) } catch (_: InterruptedException) {}
+            ret = bridge.sendMessage(CMD_KEY, caps)
+        }
+        if (ret != 0) Log.e(TAG, "$label sendMessage 重试${attempt}次后仍失败 ret=$ret 本条丢弃")
+        else if (attempt > 0) Log.i(TAG, "$label sendMessage 重试第${attempt}次后成功")
+    }
+
     private fun onTap(i: Int) { if(!rec){sel=i;start()} else if(i==sel)stop() }
     private fun cycle(d: Int) { if(rec)return; sel=((sel+d)%scenes.size+scenes.size)%scenes.size; render() }
 
     private fun start() {
         rec=true; sid=UUID.randomUUID().toString(); videoChunkIndex = 0
         val sc=scenes[sel]; vr.start(sc.label); gt.visibility=View.GONE
-        bridge.sendMessage(CMD_KEY, Caps().apply{write("cmd");write("START");write(sc.cmd);write(sid)})
+        val caps = Caps().apply{write("cmd");write("START");write(sc.cmd);write(sid)}
+        upExec.execute { sendCmd(caps, "START") }
         Log.i(TAG, "START ${sc.cmd} $sid"); render()
     }
 
     private fun stop() {
         rec=false; val sc=scenes[sel]; vr.stop()
         gt.text=""; gt.visibility=View.GONE
-        bridge.sendMessage(CMD_KEY, Caps().apply{write("cmd");write("STOP");write(sid)})
+        val caps = Caps().apply{write("cmd");write("STOP");write(sid)}
+        upExec.execute { sendCmd(caps, "STOP") }
         Log.i(TAG, "STOP ${sc.cmd} $sid"); render()
     }
 
@@ -199,7 +224,7 @@ class MainActivity : AppCompatActivity() {
         val cc = mapOf(0 to "#10B981", 1 to "#2563EB", 2 to "#7C3AED")
         sv.forEachIndexed{i,tv->val a=i==sel; tv.setTextColor(if(rec&&a||a)Color.WHITE else if(rec)Color.parseColor("#555555") else Color.parseColor("#AAAAAA")); tv.setBackgroundColor(if(rec&&a||a)Color.parseColor(cc[i]?:("#3D5AFE")) else Color.TRANSPARENT); tv.isEnabled=!rec||a}
         st.text=if(rec)"记忆中 · ${scenes[sel].label}" else "待机 · ${scenes[sel].label}"
-        ht.text=if(rec)"单击结束记忆" else "滑动切换场景 · 单击启动记忆 · 双指双击切换空间记忆"
+        ht.text=if(rec)"单击结束记忆" else "滑动切换场景 · 单击启动记忆 · 双指长按切换空间记忆"
         spaceTag.text=if(spaceOn)"空间记忆启动，imu记录中" else "空间记忆"
         spaceTag.setTextColor(if(spaceOn)Color.parseColor("#F59E0B") else Color.parseColor("#555555"))
     }

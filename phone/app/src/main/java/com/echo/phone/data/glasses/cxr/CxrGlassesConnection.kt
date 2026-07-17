@@ -327,6 +327,10 @@ class CxrGlassesConnection(
 
     private val customCmdCallback = object : ICustomCmdCbk {
         override fun onCustomCmdResult(key: String?, payload: ByteArray?) {
+            // 诊断用：不管 key/payload 是否符合预期都先落一条日志，用于确认回调本身有没有被触发——
+            // 如果这行都不出现，说明问题在 CXR 链路/会话层面（如 onSessionPause 期间指令被丢），
+            // 不在下面的 tag 解析逻辑里。
+            EchoLog.i("onCustomCmdResult key=$key payloadBytes=${payload?.size}")
             if (key != "rk_custom_key" || payload == null) return
             val caps = runCatching { Caps.fromBytes(payload) }.getOrNull()
             if (caps == null) {

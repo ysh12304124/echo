@@ -20,6 +20,7 @@ enum class KeyType(val action: String) {
     AI_START("com.android.action.ACTION_AI_START"),
     TWO_FINGER_SINGLE_TAP("com.android.action.ACTION_TWO_FINGER_SINGLE_TAP"),
     TWO_FINGER_DOUBLE_TAP("com.android.action.ACTION_TWO_FINGER_DOUBLE_TAP"),
+    TWO_FINGER_LONG_PRESS("com.android.action.ACTION_TWO_FINGER_LONG_PRESS"),
     TWO_FINGER_SWIPE_FORWARD("com.android.action.ACTION_TWO_FINGER_SWIPE_FORWARD"),
     TWO_FINGER_SWIPE_BACK("com.android.action.ACTION_TWO_FINGER_SWIPE_BACK"),
     SETTINGS_KEY("com.android.action.ACTION_SETTINGS_KEY"),

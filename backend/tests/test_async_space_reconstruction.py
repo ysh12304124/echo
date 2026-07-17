@@ -1,5 +1,3 @@
-import asyncio
-
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -9,8 +7,15 @@ import app.providers as providers_module
 
 
 @pytest.mark.asyncio
-async def test_space_completion_returns_processing_then_publishes_mock_model(monkeypatch):
+async def test_space_completion_submits_to_compute_and_completes(monkeypatch):
+    """空间记忆 complete 应把重建任务异步甩给算力服务 (submit_space)。
+
+    compute_provider_mode=mock 时 MockComputeClient 会在本地同步回填占位结果
+    (效果等同于"秒级完成")，验证的是 complete_session -> submit_space -> 回调落库
+    这条链路整体打通，而不是真实的重建质量(那部分由 compute/analyze/space 后续实现)。
+    """
     monkeypatch.setenv("ECHO_PROVIDER_MODE", "mock")
+    monkeypatch.setenv("ECHO_COMPUTE_PROVIDER_MODE", "mock")
     get_settings.cache_clear()
     providers_module._provider_factory = None
 
@@ -23,20 +28,13 @@ async def test_space_completion_returns_processing_then_publishes_mock_model(mon
         assert response.status_code == 201
         session_id = response.json()["session_id"]
 
-        # 眼镜端已不再拍照，帧上传接口已移除；空间重建 mock 流程不依赖帧内容即可完成。
         response = await client.post(f"/api/v1/ingest/sessions/{session_id}/complete")
         assert response.status_code == 200
         memory_id = response.json()["memory_id"]
-        assert response.json()["status"] == "processing"
+        assert response.json()["status"] == "completed"
 
-        for _ in range(20):
-            await asyncio.sleep(0.02)
-            space = await client.get(f"/api/v1/spaces/{memory_id}")
-            if space.json()["status"] != "processing":
-                break
-
+        space = await client.get(f"/api/v1/spaces/{memory_id}")
         assert space.status_code == 200
         payload = space.json()
         assert payload["status"] == "completed"
-        assert payload["model_format"] == "glb"
-        assert payload["model_url"] == "/api/v1/media/placeholder_3d.glb"
+        assert payload["identify_brief"] == "(mock 占位结果)"

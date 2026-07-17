@@ -11,6 +11,7 @@ from app.domain.enums import (
     ConfidenceLevel,
     DataPartition,
     EntityType,
+    EvidenceType,
     MemoryStatus,
     MemoryType,
     TimeScene,
@@ -21,7 +22,6 @@ from app.domain.models import (
     Evidence,
     Event,
     IngestSession,
-    ImuSample,
     NavigationSummary,
     Person,
     SpaceAnchor,
@@ -36,7 +36,6 @@ from app.repositories.database import (
     PersonORM,
     QueryLogORM,
     SessionORM,
-    ImuSampleORM,
     SpaceMemoryORM,
     TimeMemoryORM,
 )
@@ -108,18 +107,6 @@ class MemoryRepository:
         orm = result.scalar_one_or_none()
         return orm.video_path if orm else None
 
-    async def update_session_frames(self, session_id: UUID, frame_path: str):
-        result = await self.db.execute(
-            select(SessionORM).where(SessionORM.id == str(session_id))
-        )
-        orm = result.scalar_one_or_none()
-        if orm:
-            paths = _parse_json(orm.frame_paths)
-            paths.append(frame_path)
-            orm.frame_paths = json.dumps(paths)
-            orm.frame_count = len(paths)
-            await self.db.commit()
-
     async def update_session_audio(self, session_id: UUID, audio_path: str):
         result = await self.db.execute(
             select(SessionORM).where(SessionORM.id == str(session_id))
@@ -140,36 +127,6 @@ class MemoryRepository:
         if not orm:
             return [], []
         return _parse_json(orm.frame_paths), _parse_json(orm.audio_paths)
-
-    async def save_imu_samples(self, session_id: UUID, samples: list[ImuSample]) -> int:
-        if not samples:
-            return 0
-        self.db.add_all([
-            ImuSampleORM(
-                session_id=str(session_id),
-                ax=sample.ax, ay=sample.ay, az=sample.az,
-                gx=sample.gx, gy=sample.gy, gz=sample.gz,
-                timestamp_ms=sample.timestamp_ms,
-            )
-            for sample in samples
-        ])
-        await self.db.commit()
-        return len(samples)
-
-    async def list_imu_samples(self, session_id: UUID) -> list[ImuSample]:
-        result = await self.db.execute(
-            select(ImuSampleORM)
-            .where(ImuSampleORM.session_id == str(session_id))
-            .order_by(ImuSampleORM.timestamp_ms)
-        )
-        return [
-            ImuSample(
-                ax=row.ax, ay=row.ay, az=row.az,
-                gx=row.gx, gy=row.gy, gz=row.gz,
-                timestamp_ms=row.timestamp_ms,
-            )
-            for row in result.scalars().all()
-        ]
 
     async def link_session_memory(self, session_id: UUID, memory_id: UUID, status: MemoryStatus):
         await self.db.execute(
@@ -329,6 +286,17 @@ class MemoryRepository:
             loop_angle=memory.loop_angle,
             is_favorited=memory.is_favorited,
             session_id=str(memory.session_id) if memory.session_id else None,
+            scene_type=memory.scene_type,
+            poses_url=memory.poses_url,
+            poses_sha256=memory.poses_sha256,
+            pose_count=memory.pose_count,
+            anchor_url=memory.anchor_url,
+            anchor_sha256=memory.anchor_sha256,
+            anchor_method=memory.anchor_method,
+            recording_duration_sec=memory.recording_duration_sec,
+            anchor_position_x=memory.anchor_position_x,
+            anchor_position_y=memory.anchor_position_y,
+            anchor_position_z=memory.anchor_position_z,
         )
         self.db.add(orm)
         await self.db.commit()
@@ -359,6 +327,17 @@ class MemoryRepository:
             loop_angle=orm.loop_angle,
             is_favorited=orm.is_favorited,
             session_id=UUID(orm.session_id) if orm.session_id else None,
+            scene_type=orm.scene_type,
+            poses_url=orm.poses_url,
+            poses_sha256=orm.poses_sha256,
+            pose_count=orm.pose_count,
+            anchor_url=orm.anchor_url,
+            anchor_sha256=orm.anchor_sha256,
+            anchor_method=orm.anchor_method,
+            recording_duration_sec=orm.recording_duration_sec,
+            anchor_position_x=orm.anchor_position_x,
+            anchor_position_y=orm.anchor_position_y,
+            anchor_position_z=orm.anchor_position_z,
         )
 
     async def list_space_memories(
@@ -415,6 +394,16 @@ class MemoryRepository:
         self.db.add(orm)
         await self.db.commit()
         return evidence
+
+    async def delete_evidences_by_type(self, memory_id: UUID, type: EvidenceType) -> None:
+        """算力回调覆盖式写入前先清掉该类型的旧证据，保证按 memory_id 重跑/重复回调时幂等。"""
+        await self.db.execute(
+            delete(EvidenceORM).where(
+                EvidenceORM.memory_id == str(memory_id),
+                EvidenceORM.type == type.value,
+            )
+        )
+        await self.db.commit()
 
     async def list_evidences(self, memory_id: UUID) -> list[Evidence]:
         result = await self.db.execute(

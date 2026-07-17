@@ -127,6 +127,17 @@ class SpaceMemory(BaseModel):
     loop_angle: Optional[float] = None
     is_favorited: bool = False
     session_id: Optional[UUID] = None
+    scene_type: Optional[str] = None
+    poses_url: Optional[str] = None
+    poses_sha256: Optional[str] = None
+    pose_count: Optional[int] = None
+    anchor_url: Optional[str] = None
+    anchor_sha256: Optional[str] = None
+    anchor_method: Optional[str] = None
+    recording_duration_sec: float = 0.0
+    anchor_position_x: float = 0.0
+    anchor_position_y: float = 0.0
+    anchor_position_z: float = 0.0
 
 
 class IngestSession(BaseModel):

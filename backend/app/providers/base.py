@@ -4,78 +4,9 @@ from typing import Optional
 
 
 @dataclass
-class TranscriptSegment:
-    text: str
-    start_ms: int
-    end_ms: int
-    speaker_id: Optional[str] = None
-    confidence: float = 1.0
-
-
-@dataclass
-class VisionResult:
-    summary: str
-    is_informative: bool = True
-    labels: list[str] = None
-
-    def __post_init__(self):
-        if self.labels is None:
-            self.labels = []
-
-
-@dataclass
-class OCRResult:
-    text: str
-    confidence: float = 1.0
-
-
-@dataclass
 class EmbeddingResult:
     vector: list[float]
     text: str
-
-
-@dataclass
-class ReconstructionResult:
-    model_url: str
-    quality: str
-    anchor_suggestions: list[dict]
-
-
-class ASRProvider(ABC):
-    @abstractmethod
-    async def transcribe(self, audio_path: str) -> list[TranscriptSegment]:
-        pass
-
-
-class VisionProvider(ABC):
-    @abstractmethod
-    async def analyze_frame(self, image_path: str) -> VisionResult:
-        pass
-
-    @abstractmethod
-    async def should_keep_frame(self, image_path: str) -> bool:
-        """初筛：模糊/重复/无信息帧丢弃"""
-        pass
-
-    async def summarize_session(
-        self, transcript: str, image_path: Optional[str]
-    ) -> dict:
-        """依据全量语音转写 + 首帧图片，产出一段记忆的结构化摘要。
-
-        返回 {"person_count": int, "space": str, "voice_summary": str}。默认空。
-        """
-        return {}
-
-    async def describe_scene(self, image_path: str) -> str:
-        """用 VLM 分析单张图片，返回一句话场景描述。默认空。"""
-        return ""
-
-
-class OCRProvider(ABC):
-    @abstractmethod
-    async def extract_text(self, image_path: str) -> OCRResult:
-        pass
 
 
 class LLMProvider(ABC):
@@ -165,10 +96,4 @@ class BlobStore(ABC):
 
     @abstractmethod
     def get_url(self, key: str) -> str:
-        pass
-
-
-class ReconstructionProvider(ABC):
-    @abstractmethod
-    async def reconstruct(self, frame_paths: list[str]) -> ReconstructionResult:
         pass

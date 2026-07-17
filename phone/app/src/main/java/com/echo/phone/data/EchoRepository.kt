@@ -179,6 +179,18 @@ class EchoRepository(private val api: EchoApiService) {
     suspend fun listEntities(partition: DataPartition? = null, type: String? = null): List<EntitySummary> =
         api.listEntities(partition?.name?.lowercase(), type).items.map { it.toDomain() }
 
+    suspend fun downloadText(url: String): String {
+        val fullUrl = absoluteMediaUrl(url) ?: url
+        val client = okhttp3.OkHttpClient()
+        val req = okhttp3.Request.Builder().url(fullUrl).build()
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
+                resp.body?.string() ?: throw Exception("Empty body")
+            }
+        }
+    }
+
     // --- 导出 ---
 
     suspend fun exportQueryResult(queryId: String): Map<String, Any?> =

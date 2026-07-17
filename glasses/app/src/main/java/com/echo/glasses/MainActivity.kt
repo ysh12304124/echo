@@ -11,7 +11,6 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import android.util.Log
-import android.view.View
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.echo.glasses.receiver.KeyEventListener
@@ -43,13 +42,13 @@ class MainActivity : AppCompatActivity() {
     private var rec = false
     private var sid = ""
     private var spaceOn = false
-    private var conn = false; private var phoneReady = false
+    private var conn = false
     private var videoChunkIndex = 0
     private lateinit var vr: VideoRecorder
 
     private val bridge = CXRServiceBridge()
     private lateinit var st: TextView; private lateinit var ht: TextView
-    private lateinit var ct: TextView; private lateinit var gt: TextView
+    private lateinit var ct: TextView
     private lateinit var spaceTag: TextView
     private lateinit var sv: List<TextView>
     private val kr = KeyReceiver(KeyEventListener { onKey(it) })
@@ -93,7 +92,7 @@ class MainActivity : AppCompatActivity() {
 
     private val sl = object : CXRServiceBridge.StatusListener {
         override fun onConnected(p0:String?,p1:String?,p2:Int) { conn=true; runOnUiThread{ct.text="手机已连接"} }
-        override fun onDisconnected() { conn=false; phoneReady=false; runOnUiThread{ct.text="手机已断开"} }
+        override fun onDisconnected() { conn=false; runOnUiThread{ct.text="手机已断开"} }
         override fun onConnecting(p0:String?,p1:String?,p2:Int) {}
         override fun onARTCStatus(p0:Float,p1:Boolean) {}
         override fun onRokidAccountChanged(p0:String?) {}
@@ -103,7 +102,6 @@ class MainActivity : AppCompatActivity() {
     private val mc = object : CXRServiceBridge.MsgCallback {
         override fun onReceive(name:String?,args:Caps?,bytes:ByteArray?) {
             if(args==null||args.size()<2)return
-            phoneReady = true
             val tag=args.at(0).let{if(it.type()== Caps.Value.TYPE_STRING)it.string else null}?:return
             val text=args.at(1).let{if(it.type()== Caps.Value.TYPE_STRING)it.string else null}?:return
             when(tag) {
@@ -125,7 +123,7 @@ class MainActivity : AppCompatActivity() {
             onVideoEnd = { filename -> sendVideoEnd(filename) }
         }
         st=findViewById(R.id.statusText); ht=findViewById(R.id.hintText)
-        ct=findViewById(R.id.cloudText); gt=findViewById(R.id.guideText)
+        ct=findViewById(R.id.cloudText)
         spaceTag=findViewById(R.id.spaceTag)
         sv=listOf(findViewById(R.id.sceneOnsite),findViewById(R.id.sceneMeeting),findViewById(R.id.sceneQuality))
         sv.forEachIndexed{i,tv->tv.setOnClickListener{onTap(i)}}
@@ -181,7 +179,6 @@ class MainActivity : AppCompatActivity() {
             KeyType.TWO_FINGER_SWIPE_BACK -> cycle(-1)
             // 双击(DOUBLE_CLICK)被系统占用为退出当前程序,单指长按被系统AI助手占用,双指单击实测难触发,双指双击也不理想,改用双指长按切换空间记忆。
             KeyType.TWO_FINGER_LONG_PRESS -> toggleSpace()
-            else -> {}
         }
     }
     /** 统一发送并记录 CXRServiceBridge.sendMessage 的返回码。实测 ret=-3 集中出现在系统AI/息屏
@@ -206,7 +203,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun start() {
         rec=true; sid=UUID.randomUUID().toString(); videoChunkIndex = 0
-        val sc=scenes[sel]; vr.start(sc.label); gt.visibility=View.GONE
+        val sc=scenes[sel]; vr.start(sc.label)
         val caps = Caps().apply{write("cmd");write("START");write(sc.cmd);write(sid)}
         upExec.execute { sendCmd(caps, "START") }
         Log.i(TAG, "START ${sc.cmd} $sid"); render()
@@ -214,7 +211,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun stop() {
         rec=false; val sc=scenes[sel]; vr.stop()
-        gt.text=""; gt.visibility=View.GONE
         val caps = Caps().apply{write("cmd");write("STOP");write(sid)}
         upExec.execute { sendCmd(caps, "STOP") }
         Log.i(TAG, "STOP ${sc.cmd} $sid"); render()

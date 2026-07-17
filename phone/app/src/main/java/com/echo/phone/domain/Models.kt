@@ -52,6 +52,36 @@ data class TimeMemoryDetail(
     val startedAt: String? = null,
 )
 
+data class CameraPose(
+    val position: FloatArray,
+    val rotation: FloatArray,
+    val forward: FloatArray,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is CameraPose) return false
+        return position.contentEquals(other.position) &&
+            rotation.contentEquals(other.rotation) &&
+            forward.contentEquals(other.forward)
+    }
+    override fun hashCode(): Int = position.contentHashCode() * 31 + rotation.contentHashCode()
+}
+
+data class OrbitCircle(
+    val center: FloatArray,
+    val radius: Float,
+    val normal: FloatArray,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is OrbitCircle) return false
+        return center.contentEquals(other.center) && radius == other.radius && normal.contentEquals(other.normal)
+    }
+    override fun hashCode(): Int = center.contentHashCode() * 31 + radius.hashCode()
+}
+
+data class AnchorPoint(val x: Float, val y: Float, val z: Float, val method: String = "")
+
 data class SpaceMemoryDetail(
     val spaceId: String,
     val title: String,
@@ -66,6 +96,10 @@ data class SpaceMemoryDetail(
     val keyFrames: List<KeyFrame> = emptyList(),
     val anchors: List<SpaceAnchor> = emptyList(),
     val capturedAt: String? = null,
+    val sceneType: String? = null,
+    val posesUrl: String? = null,
+    val anchorPoint: AnchorPoint? = null,
+    val recordingDurationSec: Float = 0f,
 )
 
 data class QueryEvidence(

@@ -5,82 +5,12 @@ from uuid import uuid4
 import numpy as np
 
 from app.providers.base import (
-    ASRProvider,
     BlobStore,
     EmbeddingProvider,
     EmbeddingResult,
     LLMProvider,
-    OCRProvider,
-    OCRResult,
-    ReconstructionProvider,
-    ReconstructionResult,
-    TranscriptSegment,
     VectorStore,
-    VisionProvider,
-    VisionResult,
 )
-
-
-class MockASRProvider(ASRProvider):
-  async def transcribe(self, audio_path: str) -> list[TranscriptSegment]:
-    return [
-      TranscriptSegment(
-        text="张经理说周五前交方案",
-        start_ms=0,
-        end_ms=5000,
-        speaker_id="speaker_a",
-        confidence=0.92,
-      ),
-      TranscriptSegment(
-        text="白板上写了Q3经营目标",
-        start_ms=5000,
-        end_ms=10000,
-        speaker_id="speaker_b",
-        confidence=0.88,
-      ),
-      TranscriptSegment(
-        text="客户提到良率需要提升到98%",
-        start_ms=10000,
-        end_ms=15000,
-        speaker_id="speaker_c",
-        confidence=0.85,
-      ),
-    ]
-
-
-class MockVisionProvider(VisionProvider):
-  async def describe_scene(self, image_path: str) -> str:
-    return "室内场景 — 包含桌椅与办公设备"
-
-  async def analyze_frame(self, image_path: str) -> VisionResult:
-    name = Path(image_path).stem
-    if "whiteboard" in name.lower():
-      return VisionResult(summary="白板画面，包含Q3经营目标", labels=["whiteboard", "meeting"])
-    if "device" in name.lower() or "smt" in name.lower():
-      return VisionResult(summary="SMT车间设备画面", labels=["device", "factory"])
-    return VisionResult(summary="会议现场画面", labels=["meeting", "general"])
-
-  async def should_keep_frame(self, image_path: str) -> bool:
-    if "blur" in image_path.lower() or "duplicate" in image_path.lower():
-      return False
-    return True
-
-  async def summarize_session(self, transcript: str, image_path: Optional[str]) -> dict:
-    return {
-      "person_count": 2,
-      "space": "会议室",
-      "voice_summary": (transcript[:120] if transcript else "本段记忆无语音内容"),
-    }
-
-
-class MockOCRProvider(OCRProvider):
-  async def extract_text(self, image_path: str) -> OCRResult:
-    name = str(image_path).lower()
-    if "whiteboard" in name:
-      return OCRResult(text="Q3经营目标：营收增长20%", confidence=0.9)
-    if "device" in name or "smt" in name:
-      return OCRResult(text="贴片机 SM-880", confidence=0.88)
-    return OCRResult(text="", confidence=0.0)
 
 
 class MockLLMProvider(LLMProvider):
@@ -253,18 +183,3 @@ class LocalBlobStore(BlobStore):
 
   def get_url(self, key: str) -> str:
     return f"/api/v1/media/{key}"
-
-
-class MockReconstructionProvider(ReconstructionProvider):
-  async def reconstruct(self, frame_paths: list[str]) -> ReconstructionResult:
-    quality = "excellent" if len(frame_paths) >= 10 else "good"
-    if len(frame_paths) < 3:
-      quality = "retry_required"
-    return ReconstructionResult(
-      model_url="/api/v1/media/placeholder_3d.glb",
-      quality=quality,
-      anchor_suggestions=[
-        {"name": "入口", "type": "door", "position": {"x": 0, "y": 0, "z": 0}},
-        {"name": "设备区", "type": "device", "position": {"x": 2, "y": 0, "z": 1}},
-      ],
-    )

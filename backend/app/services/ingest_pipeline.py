@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
-import wave
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,39 +8,32 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from app.domain.enums import (
-    ConfidenceLevel,
     DataPartition,
-    EvidenceType,
     MemoryStatus,
     MemoryType,
-    SpaceQuality,
     TimeScene,
 )
 from app.domain.models import (
-    Evidence,
     ImuSample,
     IngestSession,
-    NavigationSummary,
-    SpaceAnchor,
     SpaceMemory,
     TimeMemory,
 )
 from app.logging_setup import get_logger
 from app.providers import ProviderFactory, get_provider_factory
 from app.repositories.memory_repo import MemoryRepository
-from app.services.spatial import detect_loop
+from app.services.compute_client import (
+    AudioAnalyzeJob,
+    ComputeClient,
+    SpaceAnalyzeJob,
+    get_compute_client,
+)
 
 log = get_logger("ingest")
 
 # 按 session 序列化视频分片的 append+rename：IngestPipeline 每次请求都会重新构造实例，
 # 故用模块级字典保存锁，防止手机端并发/乱序上传（或重复上报）导致分片错序、成片被截断。
 _video_append_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-
-# 眼镜端音频约定：PCM 16kHz / 单声道 / 16bit（手机端按 1 秒 32000 字节分块上传）。
-_AUDIO_SAMPLE_RATE = 16000
-_AUDIO_CHANNELS = 1
-_AUDIO_SAMPLE_WIDTH = 2
-_KEY_FRAME_COUNT = 3
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -52,9 +43,15 @@ def _as_utc(value: datetime) -> datetime:
 
 
 class IngestPipeline:
-    def __init__(self, repo: MemoryRepository, providers: ProviderFactory | None = None):
+    def __init__(
+        self,
+        repo: MemoryRepository,
+        providers: ProviderFactory | None = None,
+        compute_client: ComputeClient | None = None,
+    ):
         self.repo = repo
         self.providers = providers or get_provider_factory()
+        self.compute_client = compute_client or get_compute_client()
 
     async def create_session(
         self,
@@ -180,11 +177,15 @@ class IngestPipeline:
 
         if session.memory_type == MemoryType.TIME:
             return await self._complete_time_session_store_only(session)
-        frame_paths, _ = await self.repo.get_session_media_paths(session_id)
-        return await self._create_processing_space_memory(session, frame_paths)
+        return await self._complete_space_session_store_only(session)
 
     async def _complete_time_session_store_only(self, session: IngestSession) -> TimeMemory:
-        """当前阶段仅做存储与结束：不跑 ASR/VLM 摘要，生成最小记忆记录供列表展示。"""
+        """存储视频/音频后，把语音分析异步甩给算力服务(接口①A)，不在这里同步等结果。
+
+        立即创建 status=PROCESSING 的记忆并 return；算力服务处理完通过
+        /internal/callback/audio 回调本服务把转写写入证据、把状态置为 completed
+        （mock 模式下这一步会在 submit_audio 内同步完成，效果等同于"秒级完成"）。
+        """
         started_at = session.created_at
         ended_at = datetime.now(timezone.utc)
         duration = int((ended_at - _as_utc(started_at)).total_seconds())
@@ -194,7 +195,7 @@ class IngestPipeline:
         memory = TimeMemory(
             scene=session.scene or TimeScene.MEETING,
             partition=session.partition,
-            status=MemoryStatus.COMPLETED,
+            status=MemoryStatus.PROCESSING,
             started_at=started_at,
             ended_at=ended_at,
             duration_seconds=duration,
@@ -204,317 +205,61 @@ class IngestPipeline:
             title=session.title,
         )
         await self.repo.create_time_memory(memory)
-        await self.repo.link_session_memory(session.id, memory.id, MemoryStatus.COMPLETED)
+        await self.repo.link_session_memory(session.id, memory.id, MemoryStatus.PROCESSING)
         log.info(
-            "时间记忆已保存(仅存储) memory=%s session=%s duration=%ds video=%s audio_chunks=%d",
+            "时间记忆已创建,等待算力异步分析语音 memory=%s session=%s duration=%ds video=%s audio_chunks=%d",
             memory.id, session.id, duration, video_path, len(audio_paths),
         )
-        return memory
 
-    async def _create_processing_space_memory(
-        self, session: IngestSession, frame_paths: list[str]
-    ) -> SpaceMemory:
-        """Persist the space record before the long-running remote job starts."""
+        job = AudioAnalyzeJob(
+            memory_id=memory.id,
+            session_id=session.id,
+            partition=session.partition,
+            audio_paths=audio_paths,
+        )
+        await self.compute_client.submit_audio(job)
+        log.info("语音分析任务已提交算力服务 session=%s memory=%s job=%s", session.id, memory.id, job.job_id)
+
+        return await self.repo.get_time_memory(memory.id) or memory
+
+    async def _complete_space_session_store_only(self, session: IngestSession) -> SpaceMemory:
+        """存储视频/IMU后，把空间重建异步甩给算力服务(接口①C)，不在这里同步等结果。
+
+        立即创建 status=PROCESSING 的记忆并 return；算力服务处理完通过
+        /internal/callback/space 回调本服务把重建结果写入并把状态置为 completed
+        （mock 模式下这一步会在 submit_space 内同步完成，效果等同于"秒级完成"）。
+        """
         existing = await self.repo.get_space_memory(session.memory_id) if session.memory_id else None
         if existing:
             return existing
 
-        imu_samples = await self.repo.list_imu_samples(session.id)
-        loop = detect_loop(imu_samples)
+        video_path = await self.repo.get_session_video_path(session.id)
+        blob = self.providers.blob_store()
+        imu_path = await blob.get_path(f"sessions/{session.id}/imu/imu.jsonl")
+
         memory = SpaceMemory(
             partition=session.partition,
             status=MemoryStatus.PROCESSING,
-            quality=SpaceQuality.GOOD,
             captured_at=datetime.now(timezone.utc),
-            identify_brief=session.title or "空间采集，正在重建",
-            loop_angle=loop.angle_degrees,
+            identify_brief=session.title or "空间采集，正在分析",
             session_id=session.id,
             title=session.title or "空间记忆",
         )
         await self.repo.create_space_memory(memory)
         await self.repo.link_session_memory(session.id, memory.id, MemoryStatus.PROCESSING)
         log.info(
-            "空间重建任务已创建 session=%s memory=%s frames=%d loop_angle=%.2f",
-            session.id, memory.id, len(frame_paths), loop.angle_degrees,
+            "空间记忆已创建,等待算力异步重建 memory=%s session=%s video=%s imu=%s",
+            memory.id, session.id, video_path, imu_path,
         )
-        return memory
 
-    async def run_space_reconstruction(
-        self, memory_id: UUID, session_id: UUID, frame_paths: list[str]
-    ) -> SpaceMemory:
-        """Run remote FastGS and update the already-created space record."""
-        memory = await self.repo.get_space_memory(memory_id)
-        if not memory:
-            raise ValueError("Space memory not found")
-        from app.services.remote_reconstruction import RemoteReconstructionService
-
-        try:
-            service = RemoteReconstructionService()
-            if service.is_configured():
-                artifact = await service.reconstruct(
-                    session_id=session_id,
-                    space_id=memory_id,
-                    frame_paths=frame_paths,
-                    blob_store=self.providers.blob_store(),
-                )
-            else:
-                # Keep offline/mock development usable until remote FastGS settings exist.
-                result = await self.providers.reconstruction().reconstruct(frame_paths)
-                model_format = Path(result.model_url).suffix.lower().lstrip(".") or None
-                updated = await self.repo.update_space_memory(
-                    memory_id,
-                    status=MemoryStatus.COMPLETED,
-                    quality=SpaceQuality.GOOD,
-                    model_url=result.model_url,
-                    model_format=model_format,
-                    identify_brief="空间重建完成（mock）",
-                )
-                await self.repo.link_session_memory(session_id, memory_id, MemoryStatus.COMPLETED)
-                return updated
-            updated = await self.repo.update_space_memory(
-                memory_id,
-                status=MemoryStatus.COMPLETED,
-                quality=SpaceQuality.GOOD,
-                model_url=artifact.model_url,
-                model_format=artifact.model_format,
-                identify_brief="空间重建完成",
-            )
-            await self.repo.link_session_memory(session_id, memory_id, MemoryStatus.COMPLETED)
-            log.info(
-                "空间重建完成 session=%s memory=%s job=%s model=%s size=%d sha256=%s",
-                session_id, memory_id, artifact.job_id, artifact.model_url,
-                artifact.size_bytes, artifact.sha256,
-            )
-            return updated
-        except Exception as exc:
-            await self.repo.update_space_memory(
-                memory_id,
-                status=MemoryStatus.FAILED,
-                quality=SpaceQuality.RETRY_REQUIRED,
-                identify_brief="空间重建失败，请重新录制",
-            )
-            await self.repo.link_session_memory(session_id, memory_id, MemoryStatus.FAILED)
-            log.exception("空间重建失败 session=%s memory=%s: %s", session_id, memory_id, exc)
-            return await self.repo.get_space_memory(memory_id)
-
-    async def _process_time_session(
-        self, session: IngestSession, frame_paths: list[str], audio_paths: list[str]
-    ) -> TimeMemory:
-        memory = TimeMemory(
-            scene=session.scene or TimeScene.MEETING,
-            partition=session.partition,
-            status=MemoryStatus.PROCESSING,
-            started_at=session.created_at,
-            ended_at=datetime.now(timezone.utc),
+        job = SpaceAnalyzeJob(
+            memory_id=memory.id,
             session_id=session.id,
-            title=session.title,
-        )
-        await self.repo.create_time_memory(memory)
-        await self.repo.link_session_memory(session.id, memory.id, MemoryStatus.PROCESSING)
-        log.info(
-            "开始处理时间记忆 memory=%s frames=%d audio_chunks=%d",
-            memory.id, len(frame_paths), len(audio_paths),
-        )
-
-        asr = self.providers.asr()
-        vision = self.providers.vision()
-        embedding = self.providers.embedding()
-        vector_store = self.providers.vector_store()
-
-        # 1) 所有语音块合并为一整段，只发一次 Whisper ASR 得到全量转写。
-        transcript_text = await self._transcribe_all_audio(asr, audio_paths)
-        log.info(
-            "语音转写完成 memory=%s 文本长度=%d 文本=%r",
-            memory.id, len(transcript_text), transcript_text,
-        )
-
-        # 2) 全量转写 + 收到的第一张图片 → gemma 得到 人物数量/空间/语音总结。
-        first_image = frame_paths[0] if frame_paths else None
-        summary = await vision.summarize_session(transcript_text, first_image)
-        person_count = int(summary.get("person_count", 0) or 0)
-        space = (summary.get("space") or "").strip()
-        voice_summary = (summary.get("voice_summary") or "").strip()
-        log.info(
-            "记忆摘要生成 memory=%s person_count=%d space=%r voice_summary_len=%d",
-            memory.id, person_count, space, len(voice_summary),
-        )
-
-        # 3) 保存全量转写为证据并建立向量索引，供客户端 /query 检索。
-        if transcript_text:
-            ev = Evidence(
-                memory_id=memory.id,
-                type=EvidenceType.TRANSCRIPT,
-                content=transcript_text,
-                timestamp_ms=0,
-                confidence=ConfidenceLevel.HIGH,
-            )
-            await self.repo.save_evidence(ev)
-            emb = await embedding.embed(transcript_text)
-            await vector_store.upsert(
-                str(ev.id),
-                emb.vector,
-                {"memory_id": str(memory.id), "partition": memory.partition.value, "type": "transcript"},
-            )
-
-        duration = int((datetime.now(timezone.utc) - _as_utc(session.created_at)).total_seconds())
-        key_frames = self._select_key_frames(session.id, frame_paths, duration)
-
-        # 组织可读摘要：时间由 started_at/duration 体现，人物数量/空间/语音总结落到展示字段。
-        identify_brief = f"共{person_count}人 · 空间：{space or '未知'}｜{voice_summary or '无语音内容'}"
-        nav_summary = NavigationSummary(
-            persons=[f"{person_count}人"],
-            topics=[space] if space else [],
-            spaces=[space] if space else [],
-        )
-
-        memory = await self.repo.update_time_memory(
-            memory.id,
-            status=MemoryStatus.COMPLETED,
-            identify_brief=identify_brief,
-            navigation_summary=nav_summary,
-            key_frames=key_frames,
-            evidence_status="ready",
-            duration_seconds=duration,
-            title=memory.title or identify_brief,
-            ended_at=datetime.now(timezone.utc),
-        )
-        await self.repo.link_session_memory(session.id, memory.id, MemoryStatus.COMPLETED)
-        log.info("时间记忆已保存 memory=%s duration=%ds", memory.id, duration)
-        return memory
-
-    def _select_key_frames(
-        self,
-        session_id: UUID,
-        frame_paths: list[str],
-        duration_seconds: int,
-    ) -> list[dict]:
-        """Persist the selected key frame markers once at complete time."""
-        key_frames: list[dict] = []
-        if not frame_paths:
-            return key_frames
-
-        for index in self._select_key_frame_indexes(len(frame_paths)):
-            frame_path = frame_paths[index]
-            media_key = self._frame_media_key(session_id, frame_path)
-            timestamp_ms = self._estimate_frame_timestamp_ms(
-                index, len(frame_paths), duration_seconds
-            )
-            key_frames.append(
-                {
-                    "media_path": media_key,
-                    "filename": Path(frame_path).name,
-                    "frame_index": index,
-                    "timestamp_ms": timestamp_ms,
-                    "label": "",
-                    "description": "",
-                }
-            )
-
-        return key_frames
-
-    def _select_key_frame_indexes(self, frame_count: int) -> list[int]:
-        if frame_count <= 0:
-            return []
-        selected_count = min(frame_count, _KEY_FRAME_COUNT)
-        if frame_count <= _KEY_FRAME_COUNT:
-            return list(range(frame_count))
-        return [
-            round((i + 1) * (frame_count - 1) / (selected_count + 1))
-            for i in range(selected_count)
-        ]
-
-    def _frame_media_key(self, session_id: UUID, frame_path: str) -> str:
-        return f"sessions/{session_id}/frames/{Path(frame_path).name}"
-
-    def _estimate_frame_timestamp_ms(
-        self, frame_index: int, frame_count: int, duration_seconds: int
-    ) -> int:
-        if frame_count <= 1 or duration_seconds <= 0:
-            return 0
-        return int((frame_index / (frame_count - 1)) * duration_seconds * 1000)
-
-    async def _transcribe_all_audio(self, asr, audio_paths: list[str]) -> str:
-        """把所有 PCM 音频块合并成一段 WAV，只调用一次 ASR，返回全量转写文本。"""
-        if not audio_paths:
-            return ""
-        pcm = bytearray()
-        for p in audio_paths:
-            try:
-                pcm += Path(p).read_bytes()
-            except OSError as e:
-                log.warning("读取音频块失败 %s: %s", p, e)
-        if not pcm:
-            return ""
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            wav_path = tmp.name
-        try:
-            with wave.open(wav_path, "wb") as w:
-                w.setnchannels(_AUDIO_CHANNELS)
-                w.setsampwidth(_AUDIO_SAMPLE_WIDTH)
-                w.setframerate(_AUDIO_SAMPLE_RATE)
-                w.writeframes(bytes(pcm))
-            segments = await asr.transcribe(wav_path)
-            return " ".join(s.text for s in segments if s.text).strip()
-        finally:
-            Path(wav_path).unlink(missing_ok=True)
-
-    async def _process_space_session(
-        self,
-        session: IngestSession,
-        frame_paths: list[str],
-        imu_samples: list[ImuSample],
-    ) -> SpaceMemory:
-        reconstruction = self.providers.reconstruction()
-        result = await reconstruction.reconstruct(frame_paths)
-
-        quality_map = {
-            "excellent": SpaceQuality.EXCELLENT,
-            "good": SpaceQuality.GOOD,
-            "retry_required": SpaceQuality.RETRY_REQUIRED,
-        }
-        quality = quality_map.get(result.quality, SpaceQuality.GOOD)
-        loop = detect_loop(imu_samples)
-        model_format = None
-        if result.model_url:
-            suffix = Path(result.model_url).suffix.lower().lstrip(".")
-            model_format = suffix if suffix in {"ply", "splat", "glb"} else None
-
-        anchors = [
-            SpaceAnchor(
-                space_id=uuid4(),
-                name=s["name"],
-                anchor_type=s.get("type", "generic"),
-                position=s.get("position", {"x": 0, "y": 0, "z": 0}),
-            )
-            for s in result.anchor_suggestions
-        ]
-
-        # VLM 场景描述
-        scene_desc = ""
-        if frame_paths:
-            try:
-                vision = self.providers.vision()
-                scene_desc = await vision.describe_scene(frame_paths[0])
-                log.info("空间记忆场景描述 memory=%s desc=%r", session.id, scene_desc)
-            except Exception as e:
-                log.warning("场景描述生成失败: %s", e)
-
-        memory = SpaceMemory(
             partition=session.partition,
-            status=MemoryStatus.COMPLETED if quality != SpaceQuality.RETRY_REQUIRED else MemoryStatus.FAILED,
-            quality=quality,
-            model_url=result.model_url,
-            anchors=anchors,
-            captured_at=datetime.now(timezone.utc),
-            identify_brief=scene_desc or session.title or "空间采集",
-            model_format=model_format,
-            loop_angle=loop.angle_degrees,
-            session_id=session.id,
-            title=session.title or "空间记忆",
+            video_path=video_path,
+            imu_path=imu_path,
         )
-        for a in anchors:
-            a.space_id = memory.id
+        await self.compute_client.submit_space(job)
+        log.info("空间分析任务已提交算力服务 session=%s memory=%s job=%s", session.id, memory.id, job.job_id)
 
-        await self.repo.create_space_memory(memory)
-        await self.repo.link_session_memory(session.id, memory.id, memory.status)
-        return memory
+        return await self.repo.get_space_memory(memory.id) or memory

@@ -31,22 +31,6 @@ class SessionORM(Base):
     video_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
-class ImuSampleORM(Base):
-    __tablename__ = "imu_samples"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    session_id: Mapped[str] = mapped_column(String(36), index=True)
-    ax: Mapped[float] = mapped_column(Float)
-    ay: Mapped[float] = mapped_column(Float)
-    az: Mapped[float] = mapped_column(Float)
-    gx: Mapped[float] = mapped_column(Float)
-    gy: Mapped[float] = mapped_column(Float)
-    gz: Mapped[float] = mapped_column(Float)
-    timestamp_ms: Mapped[int] = mapped_column(Integer, index=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
-    )
-
-
 class TimeMemoryORM(Base):
     __tablename__ = "time_memories"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -83,6 +67,17 @@ class SpaceMemoryORM(Base):
     loop_angle: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     is_favorited: Mapped[bool] = mapped_column(Boolean, default=False)
     session_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    scene_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    poses_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    poses_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    pose_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    anchor_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    anchor_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    anchor_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    recording_duration_sec: Mapped[float] = mapped_column(Float, default=0.0)
+    anchor_position_x: Mapped[float] = mapped_column(Float, default=0.0)
+    anchor_position_y: Mapped[float] = mapped_column(Float, default=0.0)
+    anchor_position_z: Mapped[float] = mapped_column(Float, default=0.0)
 
 
 class EvidenceORM(Base):

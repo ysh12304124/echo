@@ -4,21 +4,22 @@ import json
 from typing import Optional
 from uuid import UUID
 
-import asyncio
-
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import BindingType, DataPartition, MemoryStatus, MemoryType, TimeScene
 from app.domain.models import ImuSample, NavigationSummary, SpaceMemory, TimeMemory
-from app.providers import get_provider_factory
-from app.repositories.database import async_session_factory, get_db
+from app.providers import get_provider_factory, get_settings
+from app.repositories.database import get_db
 from app.repositories.memory_repo import MemoryRepository
 from app.schemas import (
+    AnchorResponse,
     BindingListResponse,
     BindingResponse,
+    ComputeCallbackAck,
+    ComputeCallbackRequest,
     CreateSessionRequest,
     EntityListResponse,
     EntitySummaryResponse,
@@ -26,7 +27,6 @@ from app.schemas import (
     IngestSessionResponse,
     ImuBatchRequest,
     ImuBatchResponse,
-    LoopDetectResponse,
     MemoryListResponse,
     MemorySummaryResponse,
     PersonDetailResponse,
@@ -45,10 +45,10 @@ from app.schemas import (
     UploadAckResponse,
 )
 from app.logging_setup import get_logger
+from app.services.compute_client import apply_audio_result, apply_space_result, apply_time_result
 from app.services.ingest_pipeline import IngestPipeline
 from app.services.person_service import PersonService
 from app.services.query_engine import QueryEngine
-from app.services.spatial import detect_loop
 
 
 class ExportQueryRequest(BaseModel):
@@ -56,34 +56,6 @@ class ExportQueryRequest(BaseModel):
 
 router = APIRouter()
 log = get_logger("api")
-_SPACE_RECONSTRUCTION_TASKS: dict[UUID, asyncio.Task] = {}
-
-
-async def _run_space_reconstruction_background(
-    session_id: UUID, memory_id: UUID, frame_paths: list[str]
-) -> None:
-    async with async_session_factory() as db:
-        pipeline = IngestPipeline(MemoryRepository(db))
-        await pipeline.run_space_reconstruction(memory_id, session_id, frame_paths)
-
-
-def _schedule_space_reconstruction(
-    session_id: UUID, memory_id: UUID, frame_paths: list[str]
-) -> None:
-    task = _SPACE_RECONSTRUCTION_TASKS.get(memory_id)
-    if task and not task.done():
-        return
-    task = asyncio.create_task(
-        _run_space_reconstruction_background(session_id, memory_id, frame_paths)
-    )
-    _SPACE_RECONSTRUCTION_TASKS[memory_id] = task
-
-    def _clear(done: asyncio.Task) -> None:
-        _SPACE_RECONSTRUCTION_TASKS.pop(memory_id, None)
-        if not done.cancelled() and done.exception():
-            log.exception("空间后台重建任务异常 memory=%s", memory_id, exc_info=done.exception())
-
-    task.add_done_callback(_clear)
 
 
 def get_repo(db: AsyncSession = Depends(get_db)) -> MemoryRepository:
@@ -234,17 +206,7 @@ async def complete_session(
     pipeline = IngestPipeline(repo)
     log.info("会话结束，开始处理 session=%s", session_id)
     try:
-        session = await repo.get_session(session_id)
-        if not session:
-            raise ValueError("Session not found")
-        frame_paths, _ = await repo.get_session_media_paths(session_id)
         memory = await pipeline.complete_session(session_id)
-        if isinstance(memory, SpaceMemory) and memory.status == MemoryStatus.PROCESSING:
-            _schedule_space_reconstruction(
-                session_id,
-                memory.id,
-                frame_paths,
-            )
     except ValueError as e:
         log.warning("会话处理失败 session=%s: %s", session_id, e)
         raise HTTPException(404, str(e))
@@ -297,25 +259,55 @@ async def upload_imu(
     return ImuBatchResponse(session_id=session_id, accepted_count=accepted_count)
 
 
-@router.post(
-    "/ingest/sessions/{session_id}/loop-detect",
-    response_model=LoopDetectResponse,
-)
-async def loop_detect(
-    session_id: UUID,
+# --- 算力服务回调 (docs/protocols/compute-service.md) ---
+# 本期简化：只用共享密钥头校验，不做来源 IP 限制/签名/重试（详见协议文档"简化"一节）。
+
+def _check_internal_token(x_internal_token: Optional[str]) -> None:
+    settings = get_settings()
+    if x_internal_token != settings.internal_token:
+        raise HTTPException(401, "Invalid internal token")
+
+
+@router.post("/internal/callback/audio", response_model=ComputeCallbackAck)
+async def internal_callback_audio(
+    req: ComputeCallbackRequest,
+    x_internal_token: Optional[str] = Header(default=None),
     repo: MemoryRepository = Depends(get_repo),
 ):
-    session = await repo.get_session(session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    if session.memory_type != MemoryType.SPACE:
-        raise HTTPException(400, "Loop detection is only supported for space sessions")
-    result = detect_loop(await repo.list_imu_samples(session_id))
-    return LoopDetectResponse(
-        loop_complete=result.loop_complete,
-        angle_degrees=result.angle_degrees,
-        confidence=result.confidence,
+    _check_internal_token(x_internal_token)
+    log.info(
+        "收到算力回调(audio) job=%s memory=%s status=%s", req.job_id, req.memory_id, req.status
     )
+    await apply_audio_result(repo, req.memory_id, req.status, req.result)
+    return ComputeCallbackAck(accepted=True)
+
+
+@router.post("/internal/callback/time", response_model=ComputeCallbackAck)
+async def internal_callback_time(
+    req: ComputeCallbackRequest,
+    x_internal_token: Optional[str] = Header(default=None),
+    repo: MemoryRepository = Depends(get_repo),
+):
+    _check_internal_token(x_internal_token)
+    log.info(
+        "收到算力回调(time) job=%s memory=%s status=%s", req.job_id, req.memory_id, req.status
+    )
+    await apply_time_result(repo, req.memory_id, req.status, req.result)
+    return ComputeCallbackAck(accepted=True)
+
+
+@router.post("/internal/callback/space", response_model=ComputeCallbackAck)
+async def internal_callback_space(
+    req: ComputeCallbackRequest,
+    x_internal_token: Optional[str] = Header(default=None),
+    repo: MemoryRepository = Depends(get_repo),
+):
+    _check_internal_token(x_internal_token)
+    log.info(
+        "收到算力回调(space) job=%s memory=%s status=%s", req.job_id, req.memory_id, req.status
+    )
+    await apply_space_result(repo, req.memory_id, req.status, req.result)
+    return ComputeCallbackAck(accepted=True)
 
 
 # --- Memories ---
@@ -444,6 +436,10 @@ async def list_spaces(
             scene_summary=s.scene_summary,
             model_format=s.model_format,
             loop_angle=s.loop_angle,
+            scene_type=s.scene_type,
+            poses_url=s.poses_url,
+            anchor=AnchorResponse(position={"x": s.anchor_position_x, "y": s.anchor_position_y, "z": s.anchor_position_z}, method=s.anchor_method) if s.anchor_method else None,
+            recording_duration_sec=s.recording_duration_sec,
         )
         for s in spaces
     ]
@@ -477,6 +473,10 @@ async def get_space(space_id: UUID, repo: MemoryRepository = Depends(get_repo)):
         scene_summary=space.scene_summary,
         model_format=space.model_format,
         loop_angle=space.loop_angle,
+        scene_type=space.scene_type,
+        poses_url=space.poses_url,
+        anchor=AnchorResponse(position={"x": space.anchor_position_x, "y": space.anchor_position_y, "z": space.anchor_position_z}, method=space.anchor_method) if space.anchor_method else None,
+        recording_duration_sec=space.recording_duration_sec,
     )
 
 

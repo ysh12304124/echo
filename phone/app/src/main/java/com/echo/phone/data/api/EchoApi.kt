@@ -185,6 +185,11 @@ data class TimeMemoryDetailDto(
 
 data class KeyFrameDto(val media_url: String = "", val filename: String = "", val frame_index: Int = 0, val timestamp_ms: Long = 0)
 
+data class AnchorDto(
+    val position: Map<String, Double>? = null,
+    val method: String? = null,
+)
+
 data class SpaceAnchorDto(
     val anchor_id: String,
     val name: String,
@@ -206,6 +211,10 @@ data class SpaceMemoryDetailDto(
     val key_frames: List<KeyFrameDto>? = null,
     val anchors: List<SpaceAnchorDto>? = null,
     val captured_at: String? = null,
+    val scene_type: String? = null,
+    val poses_url: String? = null,
+    val anchor: AnchorDto? = null,
+    val recording_duration_sec: Float = 0f,
 )
 
 data class SpaceListDto(val items: List<SpaceMemoryDetailDto>, val total: Int)
@@ -352,6 +361,17 @@ fun SpaceMemoryDetailDto.toDomain() = SpaceMemoryDetail(
         SpaceAnchor(anchorId = it.anchor_id, name = it.name, anchorType = it.anchor_type)
     } ?: emptyList(),
     capturedAt = captured_at,
+    sceneType = scene_type,
+    posesUrl = poses_url,
+    anchorPoint = anchor?.position?.let { pos ->
+        AnchorPoint(
+            x = (pos["x"] ?: 0.0).toFloat(),
+            y = (pos["y"] ?: 0.0).toFloat(),
+            z = (pos["z"] ?: 0.0).toFloat(),
+            method = anchor?.method ?: "",
+        )
+    },
+    recordingDurationSec = recording_duration_sec,
 )
 
 fun QueryResponseDto.toDomain() = QueryResult(

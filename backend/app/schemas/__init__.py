@@ -79,12 +79,6 @@ class ImuBatchResponse(BaseModel):
     accepted_count: int
 
 
-class LoopDetectResponse(BaseModel):
-    loop_complete: bool
-    angle_degrees: float
-    confidence: float
-
-
 class MemorySummaryResponse(BaseModel):
     memory_id: UUID
     memory_type: MemoryType
@@ -138,6 +132,11 @@ class TimeMemoryDetailResponse(BaseModel):
         return format_beijing_time(value)
 
 
+class AnchorResponse(BaseModel):
+    position: dict = Field(default_factory=dict)
+    method: Optional[str] = None
+
+
 class SpaceAnchorResponse(BaseModel):
     anchor_id: UUID
     name: str
@@ -159,6 +158,10 @@ class SpaceMemoryDetailResponse(BaseModel):
     scene_summary: Optional[str] = None
     model_format: Optional[str] = None
     loop_angle: Optional[float] = None
+    scene_type: Optional[str] = None
+    poses_url: Optional[str] = None
+    anchor: Optional[AnchorResponse] = None
+    recording_duration_sec: float = 0.0
 
     @field_serializer("captured_at")
     def _format_captured_at(self, value: Optional[datetime]) -> Optional[str]:
@@ -280,3 +283,17 @@ class UpdateSpaceRequest(BaseModel):
 class ExportResultResponse(BaseModel):
     export_id: UUID
     content: dict
+
+
+# --- 算力服务回调 (docs/protocols/compute-service.md) ---
+
+class ComputeCallbackRequest(BaseModel):
+    job_id: str
+    memory_id: UUID
+    status: str = "succeeded"  # succeeded | failed
+    result: dict = Field(default_factory=dict)
+    error: Optional[str] = None
+
+
+class ComputeCallbackAck(BaseModel):
+    accepted: bool = True

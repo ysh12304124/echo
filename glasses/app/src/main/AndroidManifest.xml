@@ -1,11 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- CustomApp 仅做状态显示与按键上报，采集由眼镜固件经 CXR-L 完成，无需相机/麦克风权限。 -->
+    <!-- VideoRecorder 直接用 Camera2 API 在应用内录制视频，需要相机权限；上报数据经 CXR-S sendMessage 走网络。 -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
@@ -26,13 +24,5 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-            <activity android:name=".EnterpriseProbeActivity" android:exported="true" android:screenOrientation="portrait" />
-            <activity android:name=".MediaServiceProbeActivity" android:exported="true" android:screenOrientation="portrait" />
-            <activity android:name=".MasterProbeActivity" android:exported="true" android:screenOrientation="portrait" />
-            <activity android:name=".RegisterClientProbeActivity" android:exported="true" android:screenOrientation="portrait" />
-            <activity android:name=".RegisterClientProbeActivity" android:exported="true" android:screenOrientation="portrait" />
-            <activity android:name=".AssistClientProbeActivity" android:exported="true" android:screenOrientation="portrait" />
-            <activity android:name=".FinalProbeActivity" android:exported="true" android:screenOrientation="portrait" />
-            <activity android:name=".OtaProbeActivity" android:exported="true" android:screenOrientation="portrait" />
     </application>
 </manifest>

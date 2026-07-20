@@ -80,7 +80,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
+import retrofit2.HttpException
+import java.io.IOException
 
 enum class VoicePhase { IDLE, RECORDING, TRANSCRIBING, SEARCHING }
 
@@ -107,6 +110,7 @@ class QueryViewModel(
             loading = true
             error = null
             transcript = null
+            result = null
             try {
                 result = repo.query(question.trim(), com.echo.phone.domain.QueryScope.GLOBAL_WORK)
             } catch (exception: Exception) {
@@ -170,25 +174,44 @@ class QueryViewModel(
                     error = "没有采集到语音"
                     return@launch
                 }
-                val stageJob = launch {
-                    delay(1_200)
-                    if (voicePhase == VoicePhase.TRANSCRIBING) voicePhase = VoicePhase.SEARCHING
+                if (audio.size < VoiceQueryRecorder.MIN_BYTES) {
+                    error = "语音太短，请长按并说完整问题"
+                    return@launch
                 }
-                val voiceResult = repo.queryVoice(audio)
-                stageJob.cancel()
-                transcript = voiceResult.transcript.ifBlank { null }
-                question = voiceResult.transcript
-                result = voiceResult.result
-                if (!voiceResult.asrAccepted) {
-                    error = voiceResult.rejectionReason ?: "语音识别置信度不足"
+
+                val transcription = repo.transcribeVoice(audio)
+                transcript = transcription.transcript.ifBlank { null }
+                question = transcription.transcript
+                if (!transcription.asrAccepted) {
+                    error = transcription.rejectionReason ?: "没听清，请再说一次"
+                    return@launch
                 }
+                voicePhase = VoicePhase.SEARCHING
+                result = repo.query(
+                    transcription.transcript,
+                    com.echo.phone.domain.QueryScope.GLOBAL_WORK,
+                )
             } catch (exception: Exception) {
-                error = exception.message ?: "语音查询失败"
+                error = userFacingQueryError(exception)
             } finally {
                 voicePhase = VoicePhase.IDLE
                 loading = false
                 finishing = false
             }
+        }
+    }
+
+    private fun userFacingQueryError(exception: Exception): String {
+        if (exception is IOException) return "网络连接失败，请检查网络后重试"
+        return when ((exception as? HttpException)?.code()) {
+            400 -> "语音格式不正确，请重新录制"
+            503 -> if (voicePhase == VoicePhase.TRANSCRIBING) {
+                "语音识别服务暂时不可用，请稍后重试"
+            } else {
+                "查询服务暂时不可用，请稍后重试"
+            }
+            504 -> "语音识别超时，请稍后重试"
+            else -> exception.message ?: "语音查询失败，请稍后重试"
         }
     }
 
@@ -340,6 +363,12 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
         }
 
         Spacer(Modifier.height(16.dp))
+        vm.transcript?.let { transcript ->
+            if (vm.voicePhase != VoicePhase.RECORDING) {
+                TranscriptPreview(transcript)
+                Spacer(Modifier.height(12.dp))
+            }
+        }
         AnimatedContent(
             targetState = when {
                 vm.voicePhase == VoicePhase.TRANSCRIBING -> "transcribing"
@@ -357,10 +386,6 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                 "searching" -> StatusView("正在检索", true)
                 "loading" -> StatusView("查询中", true)
                 "error" -> Column {
-                    vm.transcript?.let {
-                        Text("转写：$it", style = MaterialTheme.typography.bodyMedium)
-                        Spacer(Modifier.height(10.dp))
-                    }
                     Box(
                         Modifier
                             .fillMaxWidth()
@@ -371,13 +396,31 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                     ) { Text(vm.error ?: "查询失败", color = MaterialTheme.colorScheme.error) }
                 }
                 "result" -> {
-                    vm.transcript?.let {
-                        Text("转写：$it", style = MaterialTheme.typography.bodyMedium)
-                        Spacer(Modifier.height(12.dp))
-                    }
                     QueryResultView(vm.result!!, app.repository::absoluteMediaUrl)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun TranscriptPreview(transcript: String) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFFF3F6FA))
+            .border(1.dp, Color(0xFFD7DEE8), RoundedCornerShape(8.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        Column {
+            Text(
+                "本次查询",
+                style = MaterialTheme.typography.labelMedium,
+                color = Color(0xFF667085),
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(transcript, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
@@ -441,15 +484,14 @@ private fun QueryResultView(
                     .forEach { evidence ->
                         resolveMediaUrl(evidence.mediaUrl)?.let { imageUrl ->
                             Spacer(Modifier.height(10.dp))
-                            AsyncImage(
-                                model = imageUrl,
-                                contentDescription = evidence.content,
+                            KeyframeImage(
+                                imageUrl = imageUrl,
+                                description = evidence.content,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(180.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable { enlargedImage = imageUrl },
-                                contentScale = ContentScale.Fit,
+                                    .clip(RoundedCornerShape(8.dp)),
+                                onClick = { enlargedImage = imageUrl },
                             )
                         }
                     }
@@ -481,15 +523,14 @@ private fun QueryResultView(
                         Column {
                             if (evidence.type == EvidenceType.VISUAL) {
                                 resolveMediaUrl(evidence.mediaUrl)?.let { imageUrl ->
-                                    AsyncImage(
-                                        model = imageUrl,
-                                        contentDescription = evidence.content,
+                                    KeyframeImage(
+                                        imageUrl = imageUrl,
+                                        description = evidence.content,
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .height(150.dp)
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .clickable { enlargedImage = imageUrl },
-                                        contentScale = ContentScale.Fit,
+                                            .clip(RoundedCornerShape(6.dp)),
+                                        onClick = { enlargedImage = imageUrl },
                                     )
                                     Spacer(Modifier.height(8.dp))
                                 }
@@ -518,15 +559,53 @@ private fun QueryResultView(
                     .clickable { enlargedImage = null },
                 contentAlignment = Alignment.Center,
             ) {
-                AsyncImage(
-                    model = imageUrl,
-                    contentDescription = "关键帧大图",
+                KeyframeImage(
+                    imageUrl = imageUrl,
+                    description = "关键帧大图",
                     modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    contentScale = ContentScale.Fit,
                 )
             }
         }
     }
+}
+
+@Composable
+private fun KeyframeImage(
+    imageUrl: String,
+    description: String,
+    modifier: Modifier,
+    onClick: (() -> Unit)? = null,
+) {
+    SubcomposeAsyncImage(
+        model = imageUrl,
+        contentDescription = description,
+        modifier = modifier.then(
+            if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
+        ),
+        contentScale = ContentScale.Fit,
+        loading = {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+            }
+        },
+        error = {
+            Box(
+                Modifier.fillMaxSize().background(Color(0xFFF2F4F7)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.Image, null, tint = Color(0xFF98A2B3))
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "图片加载失败",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF667085),
+                    )
+                }
+            }
+        },
+        success = { SubcomposeAsyncImageContent() },
+    )
 }
 
 private const val LONG_PRESS_MS = 250L

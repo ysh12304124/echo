@@ -107,6 +107,8 @@ class VoiceQueryRecorder {
     companion object {
         const val SAMPLE_RATE = 16000
         const val MAX_SECONDS = 60
+        const val MIN_DURATION_MS = 500
         const val MAX_BYTES = SAMPLE_RATE * 2 * MAX_SECONDS
+        const val MIN_BYTES = SAMPLE_RATE * 2 * MIN_DURATION_MS / 1000
     }
 }

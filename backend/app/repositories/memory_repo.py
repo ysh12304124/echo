@@ -448,18 +448,29 @@ class MemoryRepository:
         )
 
     async def list_evidences_by_partition(self, partition: DataPartition) -> list[Evidence]:
-        memories, _ = await self.list_time_memories(partition=partition)
-        all_ev = []
-        for m in memories:
-            all_ev.extend(await self.list_evidences(m.id))
-        return all_ev
+        result = await self.db.execute(
+            select(EvidenceORM)
+            .join(TimeMemoryORM, TimeMemoryORM.id == EvidenceORM.memory_id)
+            .where(TimeMemoryORM.partition == partition.value)
+        )
+        rows = result.scalars().all()
+        return [
+            Evidence(
+                id=UUID(r.id),
+                memory_id=UUID(r.memory_id),
+                event_id=UUID(r.event_id) if r.event_id else None,
+                type=EvidenceType(r.type),
+                content=r.content,
+                media_path=r.media_path,
+                timestamp_ms=r.timestamp_ms,
+                confidence=ConfidenceLevel(r.confidence),
+                metadata=_parse_json(r.meta_json, {}),
+            )
+            for r in rows
+        ]
 
     async def list_all_work_evidences(self) -> list[Evidence]:
-        work_memories, _ = await self.list_time_memories(partition=DataPartition.WORK)
-        all_ev = []
-        for m in work_memories:
-            all_ev.extend(await self.list_evidences(m.id))
-        return all_ev
+        return await self.list_evidences_by_partition(DataPartition.WORK)
 
     async def list_all_evidences(self) -> list[Evidence]:
         result = await self.db.execute(select(EvidenceORM))

@@ -322,7 +322,7 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
             title = { Text("删除记忆") },
             text = { Text(if (vm.isLocked) "记忆已锁定，请先解锁再删除。" else "删除后无法恢复，确定删除？") },
             confirmButton = {
-                TextButton(enabled = !vm.isLocked, onClick = { showDeleteDialog = false; vm.delete(onBack) }) { Text("删除") }
+                TextButton(enabled = !vm.isLocked, onClick = { showDeleteDialog = false; app.notifyMemoryDeleted(memoryId); vm.delete(onBack) }) { Text("删除") }
             },
             dismissButton = { TextButton(onClick = { showDeleteDialog = false }) { Text("取消") } },
         )

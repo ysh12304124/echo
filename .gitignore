@@ -2,7 +2,7 @@
 __pycache__/
 *.py[cod]
 .venv/
-data/
+backend/data/
 *.db
 
 # Android

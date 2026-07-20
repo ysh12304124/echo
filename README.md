@@ -4,11 +4,12 @@
 
 ## 模块
 
-| 模块 | 路径 | 技术栈 | 说明 |
-|------|------|--------|------|
-| 后台服务 | `backend/` | Python FastAPI | 媒体摄入、AI 处理、记忆存储、查询 |
-| 手机端 | `phone/` | Android Kotlin + Compose + Rokid CXR-L | 链路主导：鉴权/建会话、收音频与拍照、上传后台、查询 UI |
-| 眼镜端 | `glasses/` | Android Kotlin + Rokid CXR-S | 轻量 CustomApp：镜片状态显示 + 物理按键上报 |
+| 模块 | 路径 | 技术栈 | 说明 | 文档 |
+|------|------|--------|------|------|
+| 后台服务 | `backend/` | Python FastAPI | 媒体摄入、记忆编排、提交算力任务、查询 | [docs/backend.md](docs/backend.md) |
+| 手机端 | `phone/` | Android Kotlin + Compose + Rokid CXR-L | 链路主导：鉴权/建会话、收麦克风音频与眼镜视频、上传后台、查询 UI | [docs/phone.md](docs/phone.md) |
+| 眼镜端 | `glasses/` | Android Kotlin + Rokid CXR-S | 轻量 CustomApp：录像+IMU 采样、边采边发、物理按键上报 | [docs/glasses.md](docs/glasses.md) |
+| 算力服务 | `compute/` | Python FastAPI | 独立微服务：ASR/视觉/重建等 AI 推理，异步回调后台 | [docs/compute.md](docs/compute.md) |
 
 ## 快速开始
 
@@ -34,11 +35,14 @@ API 文档: http://localhost:8000/docs
 用 Android Studio 打开 `glasses/`，编译后用 `adb` 安装到 Rokid 眼镜（或由手机端 `appUploadAndInstall` 推送）。
 包名须与手机端 `GLASS_APP_PACKAGE` 一致（默认 `com.echo.glasses`）。会话由手机端 CXR-L `appStart` 主导拉起。
 
-## 协议
+## 文档
 
-- 手机 ↔ 后台: [docs/protocols/openapi.yaml](docs/protocols/openapi.yaml)
-- 眼镜 ↔ 手机: [docs/protocols/rokid-cxr-integration.md](docs/protocols/rokid-cxr-integration.md)
-- 架构说明: [docs/architecture.md](docs/architecture.md)
+- 总体架构、数据流、接入顺序、验证清单: [docs/architecture.md](docs/architecture.md)
+- 各模块文档: [docs/backend.md](docs/backend.md) / [docs/phone.md](docs/phone.md) /
+  [docs/glasses.md](docs/glasses.md) / [docs/compute.md](docs/compute.md)
+- 协议契约: 手机 ↔ 后台 [docs/protocols/openapi.yaml](docs/protocols/openapi.yaml)，
+  后台 ↔ 算力 [docs/protocols/compute-service.md](docs/protocols/compute-service.md)，
+  眼镜 ↔ 手机 [docs/protocols/rokid-cxr-integration.md](docs/protocols/rokid-cxr-integration.md)
 
 ## 数据分区
 

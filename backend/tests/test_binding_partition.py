@@ -58,17 +58,12 @@ async def test_candidate_binding_created_for_parallel_capture(client: AsyncClien
         data={"timestamp_ms": 0},
     )
 
-    # 并行进行空间采集并完成（captured_at 落在时间窗内）
+    # 并行进行空间采集并完成（captured_at 落在时间窗内）。眼镜端已不再拍照，帧上传接口已移除，
+    # 时空绑定的候选窗口判定只依赖 captured_at，无需帧内容即可完成空间会话。
     resp = await client.post("/api/v1/ingest/sessions", json={
         "memory_type": "space", "partition": "work", "title": "现场空间",
     })
     space_session = resp.json()["session_id"]
-    for i in range(12):
-        await client.post(
-            f"/api/v1/ingest/sessions/{space_session}/frames",
-            files={"file": (f"f{i}.jpg", io.BytesIO(f"f{i}".encode()), "image/jpeg")},
-            data={"timestamp_ms": i * 1000},
-        )
     space_id = (await client.post(f"/api/v1/ingest/sessions/{space_session}/complete")).json()["memory_id"]
 
     # 完成时间记忆 → 触发候选时空绑定

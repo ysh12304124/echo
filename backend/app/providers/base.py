@@ -4,74 +4,9 @@ from typing import Optional
 
 
 @dataclass
-class TranscriptSegment:
-    text: str
-    start_ms: int
-    end_ms: int
-    speaker_id: Optional[str] = None
-    confidence: float = 1.0
-
-
-@dataclass
-class VisionResult:
-    summary: str
-    is_informative: bool = True
-    labels: list[str] = None
-
-    def __post_init__(self):
-        if self.labels is None:
-            self.labels = []
-
-
-@dataclass
-class OCRResult:
-    text: str
-    confidence: float = 1.0
-
-
-@dataclass
 class EmbeddingResult:
     vector: list[float]
     text: str
-
-
-@dataclass
-class ReconstructionResult:
-    model_url: str
-    quality: str
-    anchor_suggestions: list[dict]
-
-
-class ASRProvider(ABC):
-    @abstractmethod
-    async def transcribe(self, audio_path: str) -> list[TranscriptSegment]:
-        pass
-
-
-class VisionProvider(ABC):
-    @abstractmethod
-    async def analyze_frame(self, image_path: str) -> VisionResult:
-        pass
-
-    @abstractmethod
-    async def should_keep_frame(self, image_path: str) -> bool:
-        """初筛：模糊/重复/无信息帧丢弃"""
-        pass
-
-    async def summarize_session(
-        self, transcript: str, image_path: Optional[str]
-    ) -> dict:
-        """依据全量语音转写 + 首帧图片，产出一段记忆的结构化摘要。
-
-        返回 {"person_count": int, "space": str, "voice_summary": str}。默认空。
-        """
-        return {}
-
-
-class OCRProvider(ABC):
-    @abstractmethod
-    async def extract_text(self, image_path: str) -> OCRResult:
-        pass
 
 
 class LLMProvider(ABC):
@@ -138,6 +73,20 @@ class BlobStore(ABC):
         pass
 
     @abstractmethod
+    async def append(self, key: str, data: bytes) -> str:
+        """按顺序把新分片追加写入 key 对应的文件，用于视频边录边传的不落地转发。"""
+        pass
+
+    @abstractmethod
+    async def patch(self, key: str, offset: int, data: bytes) -> str:
+        """覆盖写 key 对应文件从 offset 开始的字节，不改变文件长度以外的内容。
+
+        用于修正视频边录边发时已发出的头部信息（如 MediaRecorder 在 stop() 时
+        回改的 mdat box 64bit size 字段），须在 append 触发的最终 rename 之前调用。
+        """
+        pass
+
+    @abstractmethod
     async def get_path(self, key: str) -> Optional[str]:
         pass
 
@@ -147,10 +96,4 @@ class BlobStore(ABC):
 
     @abstractmethod
     def get_url(self, key: str) -> str:
-        pass
-
-
-class ReconstructionProvider(ABC):
-    @abstractmethod
-    async def reconstruct(self, frame_paths: list[str]) -> ReconstructionResult:
         pass

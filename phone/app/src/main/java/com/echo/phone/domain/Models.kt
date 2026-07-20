@@ -52,6 +52,36 @@ data class TimeMemoryDetail(
     val startedAt: String? = null,
 )
 
+data class CameraPose(
+    val position: FloatArray,
+    val rotation: FloatArray,
+    val forward: FloatArray,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is CameraPose) return false
+        return position.contentEquals(other.position) &&
+            rotation.contentEquals(other.rotation) &&
+            forward.contentEquals(other.forward)
+    }
+    override fun hashCode(): Int = position.contentHashCode() * 31 + rotation.contentHashCode()
+}
+
+data class OrbitCircle(
+    val center: FloatArray,
+    val radius: Float,
+    val normal: FloatArray,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is OrbitCircle) return false
+        return center.contentEquals(other.center) && radius == other.radius && normal.contentEquals(other.normal)
+    }
+    override fun hashCode(): Int = center.contentHashCode() * 31 + radius.hashCode()
+}
+
+data class AnchorPoint(val x: Float, val y: Float, val z: Float, val method: String = "")
+
 data class SpaceMemoryDetail(
     val spaceId: String,
     val title: String,
@@ -59,11 +89,17 @@ data class SpaceMemoryDetail(
     val status: MemoryStatus,
     val quality: String?,
     val modelUrl: String?,
+    val modelFormat: String? = null,
     val identifyBrief: String,
     val isFavorited: Boolean,
     val isLocked: Boolean = false,
     val keyFrames: List<KeyFrame> = emptyList(),
     val anchors: List<SpaceAnchor> = emptyList(),
+    val capturedAt: String? = null,
+    val sceneType: String? = null,
+    val posesUrl: String? = null,
+    val anchorPoint: AnchorPoint? = null,
+    val recordingDurationSec: Float = 0f,
 )
 
 data class QueryEvidence(
@@ -137,8 +173,27 @@ data class DeviceStatus(
     val recordingDurationMs: Long = 0,
 )
 
-data class MediaFrame(val data: ByteArray, val timestampMs: Long, val isKeyMoment: Boolean = false)
 data class MediaAudio(val data: ByteArray, val timestampMs: Long)
+
+/** 眼镜端边录边发的视频分片(不落地,直接转发后台)。 */
+sealed class VideoChunk {
+    /** [streamId] 对应眼镜端本地生成的记忆会话 sid,[index] 单调递增。 */
+    data class Data(val streamId: String, val index: Int, val bytes: ByteArray) : VideoChunk()
+    /**
+     * 覆盖写文件头部 [offset] 起的 [bytes]。MediaRecorder 在 stop() 时会回改 mdat box 的
+     * 64bit size 字段(已流式发出的旧值已过期)，需要用录制结束后重读的正确头部覆盖它。
+     * 必须在 [End] 之前送达，backend 才能在 rename 前完成覆盖。
+     */
+    data class Patch(val streamId: String, val offset: Long, val bytes: ByteArray) : VideoChunk()
+    /** 视频录制结束,[filename] = 场景_开始时间_结束时间.mp4。 */
+    data class End(val streamId: String, val filename: String) : VideoChunk()
+}
+
+data class ImuSample(
+    val ax: Float, val ay: Float, val az: Float,
+    val gx: Float, val gy: Float, val gz: Float,
+    val timestampMs: Long,
+)
 
 /** 眼镜端下发的记忆控制指令类型。 */
 enum class GlassCommandType { START, STOP }
@@ -148,10 +203,12 @@ enum class GlassCommandType { START, STOP }
  *
  * 记忆的开始/结束完全由眼镜端主导：用户在眼镜内选择场景后启动 [START]（携带 [scene]），
  * 再次点击则 [STOP]。手机端仅据此驱动录制与上传，不再提供开始入口。
+ * [glassSid] 为眼镜端本地生成的记忆会话 id，用于与其后续 video_chunk/video_end 分片对账。
  */
 data class GlassCommand(
     val type: GlassCommandType,
     val scene: TimeScene? = null,
+    val glassSid: String? = null,
 )
 
 

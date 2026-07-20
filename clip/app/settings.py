@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     max_batch_size: int = 16
     max_image_bytes: int = 10 * 1024 * 1024
     embedding_dimension: int = 512
+    text_max_length: int = 512
 
 
 @lru_cache

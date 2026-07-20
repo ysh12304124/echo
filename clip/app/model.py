@@ -57,11 +57,16 @@ class ChineseClipEncoder:
             text=list(texts),
             padding=True,
             truncation=True,
+            max_length=self.settings.text_max_length,
             return_tensors="pt",
         )
         inputs = {key: value.to(self.model.device) for key, value in inputs.items()}
         with self.torch.inference_mode():
-            features = self._normalize(self.model.get_text_features(**inputs))
+            outputs = self.model.text_model(**inputs)
+            pooled = outputs.pooler_output
+            if pooled is None:
+                pooled = outputs.last_hidden_state[:, 0]
+            features = self._normalize(self.model.text_projection(pooled))
         return features.float().cpu().tolist()
 
     def encode_images(self, images: Sequence[bytes]) -> list[list[float]]:
@@ -80,5 +85,9 @@ class ChineseClipEncoder:
         inputs = self.processor(images=decoded, return_tensors="pt")
         inputs = {key: value.to(self.model.device) for key, value in inputs.items()}
         with self.torch.inference_mode():
-            features = self._normalize(self.model.get_image_features(**inputs))
+            outputs = self.model.vision_model(**inputs)
+            pooled = outputs.pooler_output
+            if pooled is None:
+                pooled = outputs.last_hidden_state[:, 0]
+            features = self._normalize(self.model.visual_projection(pooled))
         return features.float().cpu().tolist()

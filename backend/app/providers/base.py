@@ -46,6 +46,14 @@ class EmbeddingProvider(ABC):
     async def embed(self, text: str) -> EmbeddingResult:
         pass
 
+    async def embed_query(self, text: str) -> EmbeddingResult:
+        """Embed a retrieval query. Providers may apply model-specific task prefixes."""
+        return await self.embed(text)
+
+    async def embed_document(self, text: str) -> EmbeddingResult:
+        """Embed an indexed document. Providers may apply model-specific task prefixes."""
+        return await self.embed(text)
+
 
 class VectorStore(ABC):
     @abstractmethod

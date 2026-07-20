@@ -224,7 +224,7 @@ async def apply_audio_result(
         await repo.save_evidence(ev)
         embedding = providers.embedding()
         vector_store = providers.vector_store()
-        emb = await embedding.embed(transcript)
+        emb = await embedding.embed_document(transcript)
         await vector_store.upsert(
             str(ev.id),
             emb.vector,

@@ -157,3 +157,9 @@ class LocalEmbeddingProvider(EmbeddingProvider):
     async def embed(self, text: str) -> EmbeddingResult:
         vectors = await self.client.embeddings(self.model, [text])
         return EmbeddingResult(vector=vectors[0], text=text)
+
+    async def embed_query(self, text: str) -> EmbeddingResult:
+        return await self.embed(f"search_query: {text}")
+
+    async def embed_document(self, text: str) -> EmbeddingResult:
+        return await self.embed(f"search_document: {text}")

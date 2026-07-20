@@ -130,7 +130,7 @@ class QueryEngine:
     ) -> list[Evidence]:
         embedding = self.providers.embedding()
         vector_store = self.providers.vector_store()
-        q_vec = (await embedding.embed(question)).vector
+        q_vec = (await embedding.embed_query(question)).vector
 
         related_memory_ids: set[str] | None = None
         filt: dict | None

@@ -1,0 +1,742 @@
+openapi: 3.1.0
+info:
+  title: Echo API
+  version: 1.0.0
+  description: 识境 Echo 手机端与后台服务通信契约
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: 本地开发
+
+tags:
+  - name: ingest
+    description: 媒体摄入与会话管理
+  - name: memories
+    description: 时间记忆
+  - name: spaces
+    description: 空间记忆
+  - name: query
+    description: 查询
+  - name: persons
+    description: 人物库
+  - name: export
+    description: 导出
+
+paths:
+  /ingest/sessions:
+    post:
+      tags: [ingest]
+      summary: 创建摄入会话
+      operationId: createIngestSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '201':
+          description: 会话已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestSession'
+
+  /ingest/sessions/{session_id}/frames:
+    post:
+      tags: [ingest]
+      summary: 上传图片帧
+      operationId: uploadFrame
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, timestamp_ms]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                timestamp_ms:
+                  type: integer
+                  format: int64
+                is_key_moment:
+                  type: boolean
+                  default: false
+      responses:
+        '201':
+          description: 帧已接收
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadAck'
+
+  /ingest/sessions/{session_id}/audio:
+    post:
+      tags: [ingest]
+      summary: 上传音频块
+      operationId: uploadAudio
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, timestamp_ms]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                timestamp_ms:
+                  type: integer
+                  format: int64
+      responses:
+        '201':
+          description: 音频已接收
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadAck'
+
+  /ingest/sessions/{session_id}/complete:
+    post:
+      tags: [ingest]
+      summary: 结束会话并触发处理
+      operationId: completeSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: 处理已启动
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemorySummary'
+
+  /memories:
+    get:
+      tags: [memories]
+      summary: 列出时间记忆
+      operationId: listMemories
+      parameters:
+        - name: partition
+          in: query
+          schema:
+            $ref: '#/components/schemas/DataPartition'
+        - name: scene
+          in: query
+          schema:
+            $ref: '#/components/schemas/TimeScene'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/MemoryStatus'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: 记忆列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryListResponse'
+
+  /memories/{memory_id}:
+    get:
+      tags: [memories]
+      summary: 获取记忆详情
+      operationId: getMemory
+      parameters:
+        - $ref: '#/components/parameters/MemoryId'
+      responses:
+        '200':
+          description: 记忆详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TimeMemoryDetail'
+    patch:
+      tags: [memories]
+      summary: 更新记忆（重命名、收藏等）
+      operationId: updateMemory
+      parameters:
+        - $ref: '#/components/parameters/MemoryId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMemoryRequest'
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TimeMemoryDetail'
+    delete:
+      tags: [memories]
+      summary: 删除记忆
+      operationId: deleteMemory
+      parameters:
+        - $ref: '#/components/parameters/MemoryId'
+      responses:
+        '204':
+          description: 已删除
+
+  /spaces:
+    get:
+      tags: [spaces]
+      summary: 列出空间记忆
+      operationId: listSpaces
+      parameters:
+        - name: partition
+          in: query
+          schema:
+            $ref: '#/components/schemas/DataPartition'
+      responses:
+        '200':
+          description: 空间列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpaceListResponse'
+
+  /spaces/{space_id}:
+    get:
+      tags: [spaces]
+      summary: 获取空间记忆详情
+      operationId: getSpace
+      parameters:
+        - name: space_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 空间详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpaceMemoryDetail'
+
+  /query:
+    post:
+      tags: [query]
+      summary: 自然语言查询
+      operationId: query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+      responses:
+        '200':
+          description: 查询结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResponse'
+
+  /persons:
+    get:
+      tags: [persons]
+      summary: 列出人物
+      operationId: listPersons
+      parameters:
+        - name: partition
+          in: query
+          schema:
+            $ref: '#/components/schemas/DataPartition'
+      responses:
+        '200':
+          description: 人物列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonListResponse'
+
+  /persons/{person_id}:
+    get:
+      tags: [persons]
+      summary: 获取人物详情
+      operationId: getPerson
+      parameters:
+        - name: person_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 人物详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonDetail'
+    patch:
+      tags: [persons]
+      summary: 更新人物（命名、合并等）
+      operationId: updatePerson
+      parameters:
+        - name: person_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePersonRequest'
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonDetail'
+
+  /export/query-result:
+    post:
+      tags: [export]
+      summary: 导出查询结果
+      operationId: exportQueryResult
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query_id]
+              properties:
+                query_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: 导出内容
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportResult'
+
+components:
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    MemoryId:
+      name: memory_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    DataPartition:
+      type: string
+      enum: [work, quality_time]
+
+    TimeScene:
+      type: string
+      enum: [meeting, onsite, quality_time]
+
+    MemoryStatus:
+      type: string
+      enum: [not_started, recording, paused, uploading, processing, completed, failed]
+
+    MemoryType:
+      type: string
+      enum: [time, space]
+
+    ConfidenceLevel:
+      type: string
+      enum: [high, medium, low]
+
+    QueryScope:
+      type: string
+      enum: [global_work, memory, space]
+
+    QueryResultStatus:
+      type: string
+      enum: [confirmed, possible, not_found]
+
+    EvidenceType:
+      type: string
+      enum: [visual, transcript, ocr, spatial, user_note]
+
+    SpaceQuality:
+      type: string
+      enum: [excellent, good, retry_required]
+
+    CreateSessionRequest:
+      type: object
+      required: [memory_type]
+      properties:
+        memory_type:
+          $ref: '#/components/schemas/MemoryType'
+        scene:
+          $ref: '#/components/schemas/TimeScene'
+        partition:
+          $ref: '#/components/schemas/DataPartition'
+        title:
+          type: string
+
+    IngestSession:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        memory_type:
+          $ref: '#/components/schemas/MemoryType'
+        scene:
+          $ref: '#/components/schemas/TimeScene'
+        partition:
+          $ref: '#/components/schemas/DataPartition'
+        status:
+          $ref: '#/components/schemas/MemoryStatus'
+        created_at:
+          type: string
+          format: date-time
+
+    UploadAck:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        accepted:
+          type: boolean
+        filtered:
+          type: boolean
+          description: 端上或后台初筛丢弃
+
+    MemorySummary:
+      type: object
+      properties:
+        memory_id:
+          type: string
+          format: uuid
+        memory_type:
+          $ref: '#/components/schemas/MemoryType'
+        status:
+          $ref: '#/components/schemas/MemoryStatus'
+        identify_brief:
+          type: string
+          description: 一句话识别简介（首页用）
+
+    MemoryListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MemorySummary'
+        total:
+          type: integer
+
+    TimeMemoryDetail:
+      type: object
+      properties:
+        memory_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        scene:
+          $ref: '#/components/schemas/TimeScene'
+        partition:
+          $ref: '#/components/schemas/DataPartition'
+        status:
+          $ref: '#/components/schemas/MemoryStatus'
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+        duration_seconds:
+          type: integer
+        identify_brief:
+          type: string
+        navigation_summary:
+          $ref: '#/components/schemas/NavigationSummary'
+        evidence_status:
+          type: string
+        is_favorited:
+          type: boolean
+        is_locked:
+          type: boolean
+
+    NavigationSummary:
+      type: object
+      properties:
+        persons:
+          type: array
+          items:
+            type: string
+        topics:
+          type: array
+          items:
+            type: string
+        spaces:
+          type: array
+          items:
+            type: string
+        key_moments:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              label:
+                type: string
+              time_offset_seconds:
+                type: integer
+        evidence_entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvidenceRef'
+        suggested_questions:
+          type: array
+          items:
+            type: string
+
+    EvidenceRef:
+      type: object
+      properties:
+        evidence_id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/EvidenceType'
+        label:
+          type: string
+        timestamp_ms:
+          type: integer
+          format: int64
+
+    UpdateMemoryRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        is_favorited:
+          type: boolean
+        is_locked:
+          type: boolean
+        user_note:
+          type: string
+
+    SpaceMemoryDetail:
+      type: object
+      properties:
+        space_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        partition:
+          $ref: '#/components/schemas/DataPartition'
+        status:
+          $ref: '#/components/schemas/MemoryStatus'
+        quality:
+          $ref: '#/components/schemas/SpaceQuality'
+        model_url:
+          type: string
+          description: 3D 模型占位 URL
+        anchors:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpaceAnchor'
+        captured_at:
+          type: string
+          format: date-time
+        is_favorited:
+          type: boolean
+
+    SpaceAnchor:
+      type: object
+      properties:
+        anchor_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        anchor_type:
+          type: string
+        position:
+          type: object
+          properties:
+            x: { type: number }
+            y: { type: number }
+            z: { type: number }
+
+    SpaceListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SpaceMemoryDetail'
+        total:
+          type: integer
+
+    QueryRequest:
+      type: object
+      required: [question, scope]
+      properties:
+        question:
+          type: string
+        scope:
+          $ref: '#/components/schemas/QueryScope'
+        memory_id:
+          type: string
+          format: uuid
+          description: scope=memory 时必填
+        space_id:
+          type: string
+          format: uuid
+          description: scope=space 时必填
+
+    QueryResponse:
+      type: object
+      properties:
+        query_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/QueryResultStatus'
+        answer:
+          type: string
+          nullable: true
+        evidences:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueryEvidence'
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuerySource'
+        uncertainty_reason:
+          type: string
+          nullable: true
+
+    QueryEvidence:
+      type: object
+      properties:
+        evidence_id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/EvidenceType'
+        content:
+          type: string
+        confidence:
+          $ref: '#/components/schemas/ConfidenceLevel'
+        media_url:
+          type: string
+          nullable: true
+        timestamp_ms:
+          type: integer
+          format: int64
+
+    QuerySource:
+      type: object
+      properties:
+        memory_id:
+          type: string
+          format: uuid
+        memory_title:
+          type: string
+        scene:
+          $ref: '#/components/schemas/TimeScene'
+        time_offset_seconds:
+          type: integer
+
+    PersonListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PersonSummary'
+        total:
+          type: integer
+
+    PersonSummary:
+      type: object
+      properties:
+        person_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        role:
+          type: string
+        memory_count:
+          type: integer
+
+    PersonDetail:
+      type: object
+      properties:
+        person_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        role:
+          type: string
+        notes:
+          type: string
+        related_memories:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    UpdatePersonRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        role:
+          type: string
+        notes:
+          type: string
+        merge_with_id:
+          type: string
+          format: uuid
+
+    ExportResult:
+      type: object
+      properties:
+        export_id:
+          type: string
+          format: uuid
+        content:
+          type: object

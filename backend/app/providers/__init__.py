@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import Optional
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.providers.base import BlobStore, EmbeddingProvider, LLMProvider, VectorStore
+from app.providers.mock.providers import (
+    InMemoryVectorStore,
+    LocalBlobStore,
+    MockEmbeddingProvider,
+    MockLLMProvider,
+)
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="ECHO_", env_file=".env", extra="ignore")
+
+    blob_storage_path: str = "./data/blobs"
+    provider_mode: str = "mock"  # mock | local
+    database_url: str = "sqlite+aiosqlite:///./data/echo.db"
+    vector_db_path: str = "./data/vectors.db"
+
+    # 本地 OpenAI 兼容服务配置（provider_mode=local 时生效）
+    llm_base_url: str = "http://localhost:8001/v1"
+    llm_model: str = "qwen2.5"
+    llm_api_key: str = "not-needed"
+
+    embedding_base_url: str = "http://localhost:8004/v1"
+    embedding_model: str = "bge-m3"
+    embedding_api_key: str = "not-needed"
+
+    # 算力服务（compute/，独立进程，同机 localhost 通信）。
+    # compute_provider_mode 独立于 provider_mode：默认 mock，即使 provider_mode=local 也不会
+    # 在测试/离线环境里真的发网络请求；只有显式设为 http 才会真的提交给 compute_base_url。
+    compute_provider_mode: str = "mock"  # mock | http
+    compute_base_url: str = "http://127.0.0.1:8100"
+    # 算力服务回调后台时使用的地址；后台自己生成 callback_url 时用这个拼接。
+    public_callback_base_url: str = "http://127.0.0.1:8000"
+    # 后台 /internal/* 回调路由与算力服务提交请求之间约定的共享密钥，仅做简单头校验。
+    internal_token: str = "echo-internal-dev-token"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+class ProviderFactory:
+    def __init__(self, settings: Optional[Settings] = None):
+        self.settings = settings or get_settings()
+        self._vector_store: Optional[VectorStore] = None
+        self._is_local = self.settings.provider_mode.lower() == "local"
+
+    def _client(self, base_url: str, api_key: str):
+        from app.providers.local.openai_client import OpenAICompatClient
+
+        return OpenAICompatClient(base_url=base_url, api_key=api_key)
+
+    def llm(self) -> LLMProvider:
+        if self._is_local:
+            from app.providers.local.providers import LocalLLMProvider
+
+            s = self.settings
+            return LocalLLMProvider(
+                self._client(s.llm_base_url, s.llm_api_key), s.llm_model
+            )
+        return MockLLMProvider()
+
+    def embedding(self) -> EmbeddingProvider:
+        if self._is_local:
+            from app.providers.local.providers import LocalEmbeddingProvider
+
+            s = self.settings
+            return LocalEmbeddingProvider(
+                self._client(s.embedding_base_url, s.embedding_api_key), s.embedding_model
+            )
+        return MockEmbeddingProvider()
+
+    def vector_store(self) -> VectorStore:
+        if self._vector_store is None:
+            if self._is_local:
+                from app.providers.sqlite_vector import SqliteVectorStore
+
+                self._vector_store = SqliteVectorStore(self.settings.vector_db_path)
+            else:
+                self._vector_store = InMemoryVectorStore()
+        return self._vector_store
+
+    def blob_store(self) -> BlobStore:
+        return LocalBlobStore(self.settings.blob_storage_path)
+
+
+_provider_factory: Optional[ProviderFactory] = None
+
+
+def get_provider_factory() -> ProviderFactory:
+    global _provider_factory
+    if _provider_factory is None:
+        _provider_factory = ProviderFactory()
+    return _provider_factory

@@ -9,6 +9,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -22,8 +23,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -55,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -80,6 +80,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import coil.compose.AsyncImage
 
 enum class VoicePhase { IDLE, RECORDING, TRANSCRIBING, SEARCHING }
 
@@ -374,7 +375,7 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                         Text("转写：$it", style = MaterialTheme.typography.bodyMedium)
                         Spacer(Modifier.height(12.dp))
                     }
-                    QueryResultView(vm.result!!)
+                    QueryResultView(vm.result!!, app.repository::absoluteMediaUrl)
                 }
             }
         }
@@ -391,7 +392,11 @@ private fun StatusView(label: String, spinning: Boolean) {
 }
 
 @Composable
-private fun QueryResultView(result: QueryResult) {
+private fun QueryResultView(
+    result: QueryResult,
+    resolveMediaUrl: (String?) -> String?,
+) {
+    var enlargedImage by remember(result.queryId) { mutableStateOf<String?>(null) }
     val bg = when (result.status) {
         QueryResultStatus.CONFIRMED -> Color(0xFFDBEAFE)
         QueryResultStatus.POSSIBLE -> Color(0xFFFEF3C7)
@@ -431,6 +436,23 @@ private fun QueryResultView(result: QueryResult) {
             if (result.status != QueryResultStatus.NOT_FOUND) {
                 Spacer(Modifier.height(10.dp))
                 Text(result.answer ?: "", style = MaterialTheme.typography.bodyLarge)
+                result.evidences
+                    .filter { it.type == EvidenceType.VISUAL && it.mediaUrl != null }
+                    .forEach { evidence ->
+                        resolveMediaUrl(evidence.mediaUrl)?.let { imageUrl ->
+                            Spacer(Modifier.height(10.dp))
+                            AsyncImage(
+                                model = imageUrl,
+                                contentDescription = evidence.content,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { enlargedImage = imageUrl },
+                                contentScale = ContentScale.Fit,
+                            )
+                        }
+                    }
             }
             result.uncertaintyReason?.let {
                 Spacer(Modifier.height(4.dp))
@@ -443,8 +465,8 @@ private fun QueryResultView(result: QueryResult) {
         Spacer(Modifier.height(16.dp))
         Text("证据", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
-        LazyColumn {
-            itemsIndexed(result.evidences) { index, evidence ->
+        Column {
+            result.evidences.forEachIndexed { index, evidence ->
                 StaggeredItem(index) {
                     Box(
                         Modifier
@@ -456,16 +478,52 @@ private fun QueryResultView(result: QueryResult) {
                             .border(1.dp, GlassBorder, RoundedCornerShape(8.dp))
                             .padding(14.dp),
                     ) {
-                        Row(verticalAlignment = Alignment.Top) {
-                            Icon(evidence.type.let(::evIcon), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(10.dp))
-                            Column {
-                                Text(evidence.content, style = MaterialTheme.typography.bodySmall)
-                                Text("置信: ${evidence.confidence.name}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF6B7280))
+                        Column {
+                            if (evidence.type == EvidenceType.VISUAL) {
+                                resolveMediaUrl(evidence.mediaUrl)?.let { imageUrl ->
+                                    AsyncImage(
+                                        model = imageUrl,
+                                        contentDescription = evidence.content,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(150.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .clickable { enlargedImage = imageUrl },
+                                        contentScale = ContentScale.Fit,
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                }
+                            }
+                            Row(verticalAlignment = Alignment.Top) {
+                                Icon(evidence.type.let(::evIcon), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Column {
+                                    Text(evidence.content, style = MaterialTheme.typography.bodySmall)
+                                    Text("置信: ${evidence.confidence.name}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF6B7280))
+                                }
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    enlargedImage?.let { imageUrl ->
+        androidx.compose.ui.window.Dialog(onDismissRequest = { enlargedImage = null }) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .clickable { enlargedImage = null },
+                contentAlignment = Alignment.Center,
+            ) {
+                AsyncImage(
+                    model = imageUrl,
+                    contentDescription = "关键帧大图",
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    contentScale = ContentScale.Fit,
+                )
             }
         }
     }

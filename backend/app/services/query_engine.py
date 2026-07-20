@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from app.domain.enums import (
     ConfidenceLevel,
+    EvidenceType,
     QueryResultStatus,
     QueryScope,
 )
@@ -61,23 +62,38 @@ class QueryEngine:
             return result
 
         settings = get_settings()
-        top = (
-            retrieved.text[: settings.reranker_top_k]
-            + retrieved.visual[: settings.visual_retrieval_top_k]
-        )
-        evidence_context = "\n".join(
-            f"[{e.type.value}] {e.content} (confidence={e.confidence.value})" for e in top
-        )
-
-        llm = self.providers.llm()
+        text_top = retrieved.text[: settings.reranker_top_k]
         blob = self.providers.blob_store()
+        visual_top: list[Evidence] = []
+        visual_refs: dict[UUID, str] = {}
         images: list[ImageInput] = []
         for evidence in retrieved.visual[: settings.visual_retrieval_top_k]:
             if not evidence.media_path:
                 continue
             path = await blob.get_path(evidence.media_path)
-            if path:
-                images.append(ImageInput(path=path, caption=evidence.content))
+            if not path:
+                continue
+            ref = f"图片{len(visual_top) + 1}"
+            visual_top.append(evidence)
+            visual_refs[evidence.id] = ref
+            images.append(ImageInput(path=path, caption=f"{ref}: {evidence.content}"))
+
+        top = text_top + visual_top
+        if not top:
+            result = QueryResponse(query_id=query_id, status=QueryResultStatus.NOT_FOUND)
+            await self._log(query_id, question, scope, result)
+            return result
+        evidence_context = "\n".join(
+            (
+                f"[{e.type.value}][{visual_refs[e.id]}] {e.content} "
+                f"(confidence={e.confidence.value})"
+                if e.type == EvidenceType.VISUAL
+                else f"[{e.type.value}] {e.content} (confidence={e.confidence.value})"
+            )
+            for e in top
+        )
+
+        llm = self.providers.llm()
         structured = await llm.answer_query_multimodal(
             question, evidence_context, images
         )

@@ -143,6 +143,8 @@ class LocalLLMProvider(LLMProvider):
         system = (
             "你是识境 Echo 的图文查询助手。严格遵守证据优先原则：只能依据提供的文字证据 "
             "和图片回答，绝不猜测、不臆造。若证据不足以支撑确定答案，answer 返回空字符串。"
+            "图片由系统按‘图片1’、‘图片2’编号；需要引用时只能使用这些编号。"
+            "不要生成、猜测或复述任何图片 URL，也不要输出 Markdown 图片语法，图片地址由系统绑定。"
             "输出 JSON: {\"answer\": \"...\", \"confidence\": \"high|medium|low\"}。"
             "answer 为空时 confidence 用 low。"
         )

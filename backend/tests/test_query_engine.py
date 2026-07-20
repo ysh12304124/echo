@@ -125,6 +125,44 @@ async def test_query_passes_visual_evidence_to_multimodal_llm(tmp_path):
     assert result.status == QueryResultStatus.CONFIRMED
     assert result.evidences[0].media_url == str(image_path)
     assert len(llm.images) == 1
+    assert llm.images[0].caption == "图片1: 红色测试图片"
+
+
+@pytest.mark.asyncio
+async def test_query_excludes_missing_visual_media():
+    memory = TimeMemory(
+        title="缺失关键帧",
+        scene=TimeScene.MEETING,
+        partition=DataPartition.WORK,
+        status=MemoryStatus.COMPLETED,
+    )
+    evidence = Evidence(
+        id=uuid4(),
+        memory_id=memory.id,
+        type=EvidenceType.VISUAL,
+        content="不存在的图片",
+        media_path="missing.png",
+    )
+    repo = StubRepository(memory)
+
+    class MissingBlobStore(StubBlobStore):
+        async def get_path(self, key):
+            return None
+
+    providers = SimpleNamespace(
+        llm=lambda: StubLLM(),
+        blob_store=lambda: MissingBlobStore(),
+    )
+    engine = RankedEvidenceQueryEngine(repo, providers, evidence)
+
+    async def retrieve_visual(*_args):
+        return _visual_result(evidence)
+
+    engine._retrieve = retrieve_visual
+    result = await engine.query("图片是什么？", QueryScope.GLOBAL_WORK)
+
+    assert result.status == QueryResultStatus.NOT_FOUND
+    assert result.evidences == []
 
 
 def _visual_result(evidence):

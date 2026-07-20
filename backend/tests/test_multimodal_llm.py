@@ -27,3 +27,4 @@ async def test_multimodal_llm_embeds_local_images_as_data_urls(tmp_path):
     content = client.messages[1]["content"]
     assert [item["type"] for item in content] == ["text", "text", "image_url"]
     assert content[-1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert "不要生成、猜测或复述任何图片 URL" in client.messages[0]["content"]

@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     visual_retrieval_enabled: bool = True
     visual_retrieval_candidates: int = 10
     visual_retrieval_top_k: int = 3
-    visual_retrieval_min_score: float = 0.20
+    visual_retrieval_min_score: float = 0.37
     visual_max_image_bytes: int = 10 * 1024 * 1024
 
     # 算力服务（compute/，独立进程，同机 localhost 通信）。

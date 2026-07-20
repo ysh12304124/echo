@@ -9,17 +9,13 @@ from app.domain.enums import (
 )
 from app.domain.models import Evidence
 from app.providers import ProviderFactory, get_provider_factory
+from app.providers.base import RerankCandidate
 from app.repositories.memory_repo import MemoryRepository
 from app.schemas import (
     QueryEvidenceResponse,
     QueryResponse,
     QuerySourceResponse,
 )
-
-# 检索规模：单机 MVP 下取较大 top-k 以保证召回；本地部署可按需下调。
-RETRIEVAL_TOP_K = 50
-CONTEXT_LIMIT = 8
-
 
 class QueryEngine:
     def __init__(self, repo: MemoryRepository, providers: ProviderFactory | None = None):
@@ -55,7 +51,7 @@ class QueryEngine:
             await self._log(query_id, question, scope, result)
             return result
 
-        top = ranked[:CONTEXT_LIMIT]
+        top = ranked[: get_settings().reranker_top_k]
         evidence_context = "\n".join(
             f"[{e.type.value}] {e.content} (confidence={e.confidence.value})" for e in top
         )
@@ -152,17 +148,39 @@ class QueryEngine:
             # GLOBAL_WORK：严格排除 quality_time 分区
             filt = {"partition": "work"}
 
-        scored = await vector_store.search(q_vec, top_k=RETRIEVAL_TOP_K, filter=filt)
+        settings = self.providers.settings
+        scored = await vector_store.search(
+            q_vec,
+            top_k=max(settings.reranker_candidates, settings.reranker_top_k),
+            filter=filt,
+        )
 
-        evidences: list[Evidence] = []
+        candidates: list[tuple[Evidence, float]] = []
         for ev_id, _score, meta in scored:
             if related_memory_ids is not None:
                 if meta.get("memory_id") not in related_memory_ids:
                     continue
             ev = await self.repo.get_evidence(UUID(ev_id))
             if ev:
-                evidences.append(ev)
-        return evidences
+                candidates.append((ev, _score))
+
+        if not candidates:
+            return []
+        if not settings.reranker_enabled:
+            return [ev for ev, _score in candidates[: settings.reranker_top_k]]
+
+        reranked = await self.providers.reranker().rerank(
+            question,
+            [RerankCandidate(id=str(ev.id), document=ev.content) for ev, _ in candidates],
+        )
+        scores = {item.id: item.score for item in reranked}
+        ranked = [
+            (ev, scores[str(ev.id)])
+            for ev, _ in candidates
+            if str(ev.id) in scores and scores[str(ev.id)] >= settings.reranker_min_score
+        ]
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        return [ev for ev, _score in ranked[: settings.reranker_top_k]]
 
     async def _sources(self, evidences: list[Evidence]) -> list[QuerySourceResponse]:
         sources: list[QuerySourceResponse] = []

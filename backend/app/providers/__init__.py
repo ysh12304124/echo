@@ -5,12 +5,19 @@ from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.providers.base import BlobStore, EmbeddingProvider, LLMProvider, VectorStore
+from app.providers.base import (
+    BlobStore,
+    EmbeddingProvider,
+    LLMProvider,
+    RerankerProvider,
+    VectorStore,
+)
 from app.providers.mock.providers import (
     InMemoryVectorStore,
     LocalBlobStore,
     MockEmbeddingProvider,
     MockLLMProvider,
+    MockRerankerProvider,
 )
 
 
@@ -40,6 +47,14 @@ class Settings(BaseSettings):
     public_callback_base_url: str = "http://127.0.0.1:8000"
     # 后台 /internal/* 回调路由与算力服务提交请求之间约定的共享密钥，仅做简单头校验。
     internal_token: str = "echo-internal-dev-token"
+
+    reranker_enabled: bool = True
+    reranker_base_url: str = "http://192.168.0.100:8200"
+    reranker_model: str = "Qwen3-Reranker-0.6B"
+    reranker_candidates: int = 20
+    reranker_top_k: int = 5
+    reranker_min_score: float = 0.5
+    reranker_timeout_seconds: float = 10.0
 
 
 @lru_cache
@@ -87,6 +102,21 @@ class ProviderFactory:
             else:
                 self._vector_store = InMemoryVectorStore()
         return self._vector_store
+
+    def reranker(self) -> RerankerProvider:
+        if not self._is_local:
+            return MockRerankerProvider()
+        if not self.settings.reranker_enabled:
+            return MockRerankerProvider()
+        from app.providers.local.reranker import HttpRerankerProvider
+
+        s = self.settings
+        return HttpRerankerProvider(
+            base_url=s.reranker_base_url,
+            model=s.reranker_model,
+            api_key=s.internal_token,
+            timeout=s.reranker_timeout_seconds,
+        )
 
     def blob_store(self) -> BlobStore:
         return LocalBlobStore(self.settings.blob_storage_path)

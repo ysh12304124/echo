@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.enums import BindingType, DataPartition, MemoryStatus, MemoryType, TimeScene
 from app.domain.models import ImuSample, NavigationSummary, SpaceMemory, TimeMemory
 from app.providers import get_provider_factory, get_settings
+from app.providers.base import RerankerUnavailable
 from app.repositories.database import get_db
 from app.repositories.memory_repo import MemoryRepository
 from app.schemas import (
@@ -593,7 +594,11 @@ async def get_media(key: str):
 async def query(req: QueryRequest, repo: MemoryRepository = Depends(get_repo)):
     engine = QueryEngine(repo)
     log.info("查询请求 scope=%s q=%r", req.scope.value, req.question)
-    result = await engine.query(req.question, req.scope, req.memory_id, req.space_id)
+    try:
+        result = await engine.query(req.question, req.scope, req.memory_id, req.space_id)
+    except RerankerUnavailable as exc:
+        log.error("reranker 不可用: %s", exc)
+        raise HTTPException(503, "Reranker service unavailable") from exc
     log.info(
         "查询返回 query=%s status=%s evidences=%d answer=%r",
         result.query_id,

@@ -9,6 +9,9 @@ from app.providers.base import (
     EmbeddingProvider,
     EmbeddingResult,
     LLMProvider,
+    RerankCandidate,
+    RerankResult,
+    RerankerProvider,
     VectorStore,
 )
 
@@ -92,6 +95,13 @@ class MockEmbeddingProvider(EmbeddingProvider):
     if norm > 0:
       vec = vec / norm
     return EmbeddingResult(vector=vec.tolist(), text=text)
+
+
+class MockRerankerProvider(RerankerProvider):
+  async def rerank(
+    self, query: str, candidates: list[RerankCandidate]
+  ) -> list[RerankResult]:
+    return [RerankResult(id=candidate.id, score=1.0) for candidate in candidates]
 
 
 class InMemoryVectorStore(VectorStore):

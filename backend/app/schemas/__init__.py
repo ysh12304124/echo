@@ -208,6 +208,14 @@ class QueryResponse(BaseModel):
     uncertainty_reason: Optional[str] = None
 
 
+class VoiceQueryResponse(BaseModel):
+    transcript: str = ""
+    asr_avg_logprob: Optional[float] = None
+    asr_accepted: bool
+    rejection_reason: Optional[str] = None
+    result: Optional[QueryResponse] = None
+
+
 # --- Persons ---
 
 class PersonSummaryResponse(BaseModel):

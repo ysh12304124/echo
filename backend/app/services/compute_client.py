@@ -34,6 +34,14 @@ log = get_logger("compute_client")
 _SUBMIT_TIMEOUT_SECONDS = 5.0
 
 
+class ComputeTranscriptionUnavailable(RuntimeError):
+    pass
+
+
+class ComputeTranscriptionTimeout(ComputeTranscriptionUnavailable):
+    pass
+
+
 @dataclass
 class AudioAnalyzeJob:
     memory_id: UUID
@@ -73,6 +81,9 @@ class ComputeClient(ABC):
     @abstractmethod
     async def submit_space(self, job: SpaceAnalyzeJob) -> None: ...
 
+    @abstractmethod
+    async def transcribe(self, audio_path: str) -> dict[str, Any]: ...
+
 
 class HttpComputeClient(ComputeClient):
     """真的把任务 POST 给算力服务；提交本身也是"发完即走"，不等处理结果。
@@ -80,10 +91,39 @@ class HttpComputeClient(ComputeClient):
     本期不做重试：提交失败只记警告日志，记忆保持 processing，可接受(见协议文档"简化"一节)。
     """
 
-    def __init__(self, base_url: str, callback_base_url: str, internal_token: str):
+    def __init__(
+        self,
+        base_url: str,
+        callback_base_url: str,
+        internal_token: str,
+        request_timeout: float = 120.0,
+    ):
         self.base_url = base_url.rstrip("/")
         self.callback_base_url = callback_base_url.rstrip("/")
         self.internal_token = internal_token
+        self.request_timeout = request_timeout
+
+    async def transcribe(self, audio_path: str) -> dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=self.request_timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/transcribe",
+                    headers={"X-Internal-Token": self.internal_token},
+                    json={
+                        "audio_path": audio_path,
+                        "sample_rate_hz": 16000,
+                        "channels": 1,
+                        "sample_width_bytes": 2,
+                    },
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.TimeoutException as exc:
+            raise ComputeTranscriptionTimeout("compute transcription timed out") from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ComputeTranscriptionUnavailable(
+                f"compute transcription failed: {exc}"
+            ) from exc
 
     def _callback_url(self, kind: str) -> str:
         return f"{self.callback_base_url}/api/v1/internal/callback/{kind}"
@@ -139,7 +179,6 @@ class HttpComputeClient(ComputeClient):
             f"session={job.session_id} memory={job.memory_id} type=space",
         )
 
-
 class MockComputeClient(ComputeClient):
     """本地直接回填假结果，不发真实网络请求，便于无算力服务时联调/跑测试。
 
@@ -179,6 +218,9 @@ class MockComputeClient(ComputeClient):
                 {"identify_brief": "(mock 占位结果)", "quality": "good"},
             )
 
+    async def transcribe(self, audio_path: str) -> dict[str, Any]:
+        return {"text": "", "duration_ms": 0, "avg_logprob": None}
+
 
 @lru_cache
 def get_compute_client() -> ComputeClient:
@@ -188,6 +230,7 @@ def get_compute_client() -> ComputeClient:
             base_url=settings.compute_base_url,
             callback_base_url=settings.public_callback_base_url,
             internal_token=settings.internal_token,
+            request_timeout=settings.request_timeout_seconds,
         )
     return MockComputeClient()
 

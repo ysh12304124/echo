@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import json
 from typing import Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.enums import BindingType, DataPartition, MemoryStatus, MemoryType, TimeScene
+from app.domain.enums import (
+    BindingType,
+    DataPartition,
+    MemoryStatus,
+    MemoryType,
+    QueryScope,
+    TimeScene,
+)
 from app.domain.models import ImuSample, NavigationSummary, SpaceMemory, TimeMemory
 from app.providers import get_provider_factory, get_settings
 from app.providers.base import RerankerUnavailable
@@ -44,9 +51,17 @@ from app.schemas import (
     UpdatePersonRequest,
     UpdateSpaceRequest,
     UploadAckResponse,
+    VoiceQueryResponse,
 )
 from app.logging_setup import get_logger
-from app.services.compute_client import apply_audio_result, apply_space_result, apply_time_result
+from app.services.compute_client import (
+    ComputeTranscriptionTimeout,
+    ComputeTranscriptionUnavailable,
+    apply_audio_result,
+    apply_space_result,
+    apply_time_result,
+    get_compute_client,
+)
 from app.services.ingest_pipeline import IngestPipeline
 from app.services.person_service import PersonService
 from app.services.query_engine import QueryEngine
@@ -607,6 +622,65 @@ async def query(req: QueryRequest, repo: MemoryRepository = Depends(get_repo)):
         (result.answer or "")[:80],
     )
     return result
+
+
+@router.post("/query/voice", response_model=VoiceQueryResponse)
+async def voice_query(
+    file: UploadFile = File(...),
+    repo: MemoryRepository = Depends(get_repo),
+):
+    settings = get_settings()
+    data = await file.read()
+    max_bytes = settings.voice_query_max_seconds * 16000 * 1 * 2
+    if not data:
+        raise HTTPException(400, "Audio file is empty")
+    if len(data) % 2 != 0:
+        raise HTTPException(400, "Audio must be 16-bit PCM")
+    if len(data) > max_bytes:
+        raise HTTPException(400, "Audio duration exceeds 60 seconds")
+
+    blob = get_provider_factory().blob_store()
+    key = f"query-audio/{uuid4()}.pcm"
+    path = await blob.save(key, data, "audio/pcm")
+    try:
+        try:
+            transcription = await get_compute_client().transcribe(path)
+        except ComputeTranscriptionTimeout as exc:
+            raise HTTPException(504, "ASR service timed out") from exc
+        except ComputeTranscriptionUnavailable as exc:
+            raise HTTPException(503, "ASR service unavailable") from exc
+
+        transcript = (transcription.get("text") or "").strip()
+        avg_logprob = transcription.get("avg_logprob")
+        if avg_logprob is not None:
+            avg_logprob = float(avg_logprob)
+        accepted = bool(transcript) and (
+            avg_logprob is None or avg_logprob >= settings.asr_min_avg_logprob
+        )
+        if not accepted:
+            reason = "ASR 未识别到有效文本" if not transcript else "ASR 置信度过低"
+            return VoiceQueryResponse(
+                transcript=transcript,
+                asr_avg_logprob=avg_logprob,
+                asr_accepted=False,
+                rejection_reason=reason,
+            )
+
+        try:
+            result = await QueryEngine(repo).query(
+                transcript, QueryScope.GLOBAL_WORK
+            )
+        except RerankerUnavailable as exc:
+            log.error("语音查询 reranker 不可用: %s", exc)
+            raise HTTPException(503, "Reranker service unavailable") from exc
+        return VoiceQueryResponse(
+            transcript=transcript,
+            asr_avg_logprob=avg_logprob,
+            asr_accepted=True,
+            result=result,
+        )
+    finally:
+        await blob.delete(key)
 
 
 # --- Persons ---

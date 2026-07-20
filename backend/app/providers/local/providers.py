@@ -10,10 +10,14 @@
 from __future__ import annotations
 
 import math
+import base64
+import mimetypes
+from pathlib import Path
 
 from app.providers.base import (
     EmbeddingProvider,
     EmbeddingResult,
+    ImageInput,
     LLMProvider,
 )
 from app.providers.local.openai_client import OpenAICompatClient, parse_json_loose
@@ -123,6 +127,55 @@ class LocalLLMProvider(LLMProvider):
             response_format={"type": "json_object"},
         )
         parsed = parse_json_loose(content)
+        if isinstance(parsed, dict):
+            return {
+                "answer": (parsed.get("answer") or "").strip(),
+                "confidence": parsed.get("confidence", "low"),
+            }
+        return {"answer": "", "confidence": "low"}
+
+    async def answer_query_multimodal(
+        self,
+        question: str,
+        evidence_context: str,
+        images: list[ImageInput],
+    ) -> dict:
+        system = (
+            "你是识境 Echo 的图文查询助手。严格遵守证据优先原则：只能依据提供的文字证据 "
+            "和图片回答，绝不猜测、不臆造。若证据不足以支撑确定答案，answer 返回空字符串。"
+            "输出 JSON: {\"answer\": \"...\", \"confidence\": \"high|medium|low\"}。"
+            "answer 为空时 confidence 用 low。"
+        )
+        content: list[dict] = [
+            {
+                "type": "text",
+                "text": f"问题: {question}\n\n可用文字证据:\n{evidence_context or '(无文字证据)'}",
+            }
+        ]
+        for image in images:
+            path = Path(image.path)
+            if not path.is_file():
+                continue
+            mime = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+            if image.caption:
+                content.append({"type": "text", "text": f"图片说明: {image.caption}"})
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{encoded}"},
+                }
+            )
+        response = await self.client.chat(
+            self.model,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": content},
+            ],
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        parsed = parse_json_loose(response)
         if isinstance(parsed, dict):
             return {
                 "answer": (parsed.get("answer") or "").strip(),

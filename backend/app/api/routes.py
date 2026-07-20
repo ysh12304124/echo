@@ -19,7 +19,7 @@ from app.domain.enums import (
 )
 from app.domain.models import ImuSample, NavigationSummary, SpaceMemory, TimeMemory
 from app.providers import get_provider_factory, get_settings
-from app.providers.base import RerankerUnavailable
+from app.providers.base import RerankerUnavailable, VectorIndexMismatch
 from app.repositories.database import get_db
 from app.repositories.memory_repo import MemoryRepository
 from app.schemas import (
@@ -614,6 +614,9 @@ async def query(req: QueryRequest, repo: MemoryRepository = Depends(get_repo)):
     except RerankerUnavailable as exc:
         log.error("reranker 不可用: %s", exc)
         raise HTTPException(503, "Reranker service unavailable") from exc
+    except VectorIndexMismatch as exc:
+        log.error("向量索引与 Embedding 配置不一致: %s", exc)
+        raise HTTPException(503, "Embedding index requires rebuild") from exc
     log.info(
         "查询返回 query=%s status=%s evidences=%d answer=%r",
         result.query_id,
@@ -673,6 +676,9 @@ async def voice_query(
         except RerankerUnavailable as exc:
             log.error("语音查询 reranker 不可用: %s", exc)
             raise HTTPException(503, "Reranker service unavailable") from exc
+        except VectorIndexMismatch as exc:
+            log.error("语音查询向量索引与 Embedding 配置不一致: %s", exc)
+            raise HTTPException(503, "Embedding index requires rebuild") from exc
         return VoiceQueryResponse(
             transcript=transcript,
             asr_avg_logprob=avg_logprob,

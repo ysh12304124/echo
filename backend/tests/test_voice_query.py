@@ -7,6 +7,7 @@ import pytest
 
 from app.api import routes
 from app.main import app
+from app.providers.base import VectorIndexMismatch
 from app.providers.mock.providers import LocalBlobStore
 from app.schemas import QueryResponse
 
@@ -31,6 +32,11 @@ class FakeEngine:
     async def query(self, question, scope, memory_id=None, space_id=None):
         self.calls.append((question, scope))
         return QueryResponse(query_id=uuid4(), status="not_found")
+
+
+class MismatchedIndexEngine(FakeEngine):
+    async def query(self, question, scope, memory_id=None, space_id=None):
+        raise VectorIndexMismatch("index uses nomic")
 
 
 @pytest.mark.asyncio
@@ -100,3 +106,29 @@ async def test_voice_query_rejects_audio_over_sixty_seconds(monkeypatch):
         )
     assert response.status_code == 400
     assert called is False
+
+
+@pytest.mark.asyncio
+async def test_voice_query_returns_503_when_embedding_index_requires_rebuild(
+    monkeypatch, tmp_path
+):
+    compute = FakeCompute({"text": "张经理什么时候交付样品", "avg_logprob": -0.3})
+    monkeypatch.setattr(routes, "get_compute_client", lambda: compute)
+    monkeypatch.setattr(routes, "QueryEngine", MismatchedIndexEngine)
+    monkeypatch.setattr(
+        routes,
+        "get_provider_factory",
+        lambda: SimpleNamespace(blob_store=lambda: LocalBlobStore(str(tmp_path))),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/query/voice",
+            files={"file": ("query.pcm", b"\x00\x00", "audio/pcm")},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Embedding index requires rebuild"
+    assert not list(tmp_path.rglob("*.pcm"))

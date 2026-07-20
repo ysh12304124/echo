@@ -12,6 +12,7 @@ from app.providers.base import (
     RerankCandidate,
     RerankResult,
     RerankerProvider,
+    VectorIndexInfo,
     VectorStore,
 )
 
@@ -107,9 +108,22 @@ class MockRerankerProvider(RerankerProvider):
 class InMemoryVectorStore(VectorStore):
   def __init__(self):
     self._store: dict[str, tuple[list[float], dict]] = {}
+    self._model = "mock-embedding"
+    self._dimension: int | None = None
 
   async def upsert(self, id: str, vector: list[float], metadata: dict) -> None:
-    self._store[id] = (vector, metadata)
+    if self._dimension is None:
+      self._dimension = len(vector)
+    if len(vector) != self._dimension:
+      raise ValueError("vector dimension mismatch")
+    self._store[id] = (
+      vector,
+      {
+        **metadata,
+        "embedding_model": self._model,
+        "embedding_dimension": self._dimension,
+      },
+    )
 
   async def search(
     self, vector: list[float], top_k: int = 10, filter: Optional[dict] = None
@@ -128,6 +142,34 @@ class InMemoryVectorStore(VectorStore):
 
   async def delete(self, id: str) -> None:
     self._store.pop(id, None)
+
+  async def replace_all(
+    self, entries: list[tuple[str, list[float], dict]]
+  ) -> None:
+    if entries:
+      self._dimension = len(entries[0][1])
+    if any(len(vector) != self._dimension for _, vector, _ in entries):
+      raise ValueError("vector dimension mismatch")
+    self._store = {
+      entry_id: (
+        vector,
+        {
+          **metadata,
+          "embedding_model": self._model,
+          "embedding_dimension": self._dimension,
+        },
+      )
+      for entry_id, vector, metadata in entries
+    }
+
+  async def index_info(self) -> Optional[VectorIndexInfo]:
+    if self._dimension is None:
+      return None
+    return VectorIndexInfo(
+      model=self._model,
+      dimension=self._dimension,
+      count=len(self._store),
+    )
 
   async def delete_by_filter(self, filter: dict) -> None:
     to_delete = [

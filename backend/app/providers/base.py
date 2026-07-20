@@ -25,6 +25,17 @@ class RerankerUnavailable(RuntimeError):
     """The configured reranker cannot serve this query."""
 
 
+class VectorIndexMismatch(RuntimeError):
+    """The persisted vector index does not match the configured embedding model."""
+
+
+@dataclass(frozen=True)
+class VectorIndexInfo:
+    model: str
+    dimension: int
+    count: int
+
+
 class LLMProvider(ABC):
     @abstractmethod
     async def summarize(self, context: str, prompt: str) -> str:
@@ -66,6 +77,10 @@ class EmbeddingProvider(ABC):
         """Embed a retrieval query. Providers may apply model-specific task prefixes."""
         return await self.embed(text)
 
+    async def embed_document(self, text: str) -> EmbeddingResult:
+        """Embed an indexed document. Providers may apply model-specific task prefixes."""
+        return await self.embed(text)
+
 
 class RerankerProvider(ABC):
     @abstractmethod
@@ -73,10 +88,6 @@ class RerankerProvider(ABC):
         self, query: str, candidates: list[RerankCandidate]
     ) -> list[RerankResult]:
         pass
-
-    async def embed_document(self, text: str) -> EmbeddingResult:
-        """Embed an indexed document. Providers may apply model-specific task prefixes."""
-        return await self.embed(text)
 
 
 class VectorStore(ABC):
@@ -92,6 +103,18 @@ class VectorStore(ABC):
 
     @abstractmethod
     async def delete(self, id: str) -> None:
+        pass
+
+    @abstractmethod
+    async def replace_all(
+        self, entries: list[tuple[str, list[float], dict]]
+    ) -> None:
+        """Atomically replace the complete vector collection."""
+        pass
+
+    @abstractmethod
+    async def index_info(self) -> Optional[VectorIndexInfo]:
+        """Return and validate the persisted embedding index identity."""
         pass
 
     async def delete_by_filter(self, filter: dict) -> None:

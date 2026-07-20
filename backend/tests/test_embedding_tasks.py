@@ -13,16 +13,32 @@ class RecordingClient:
 
 
 @pytest.mark.asyncio
-async def test_local_embedding_applies_nomic_task_prefixes():
+async def test_local_embedding_applies_qwen_query_instruction_only():
     client = RecordingClient()
-    provider = LocalEmbeddingProvider(client, "nomic-embed-text")
+    provider = LocalEmbeddingProvider(
+        client,
+        "qwen3-embedding:0.6b-q4_k_m",
+        "Retrieve evidence passages that answer the question",
+    )
 
     query = await provider.embed_query("项目什么时候交付？")
     document = await provider.embed_document("项目下周三交付")
 
     assert client.inputs == [
-        ["search_query: 项目什么时候交付？"],
-        ["search_document: 项目下周三交付"],
+        ["Instruct: Retrieve evidence passages that answer the question\nQuery: 项目什么时候交付？"],
+        ["项目下周三交付"],
     ]
-    assert query.text == "search_query: 项目什么时候交付？"
-    assert document.text == "search_document: 项目下周三交付"
+    assert query.text.startswith("Instruct:")
+    assert document.text == "项目下周三交付"
+
+
+@pytest.mark.asyncio
+async def test_local_embedding_rejects_unexpected_dimension():
+    provider = LocalEmbeddingProvider(
+        RecordingClient(),
+        "qwen3-embedding:0.6b-q4_k_m",
+        expected_dimension=1024,
+    )
+
+    with pytest.raises(ValueError, match="dimension mismatch"):
+        await provider.embed_document("项目下周三交付")

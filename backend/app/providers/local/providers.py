@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import math
+
 from app.providers.base import (
     EmbeddingProvider,
     EmbeddingResult,
@@ -150,16 +152,34 @@ class LocalLLMProvider(LLMProvider):
 
 
 class LocalEmbeddingProvider(EmbeddingProvider):
-    def __init__(self, client: OpenAICompatClient, model: str):
+    def __init__(
+        self,
+        client: OpenAICompatClient,
+        model: str,
+        query_instruction: str | None = None,
+        expected_dimension: int | None = None,
+    ):
         self.client = client
         self.model = model
+        self.query_instruction = query_instruction
+        self.expected_dimension = expected_dimension
 
     async def embed(self, text: str) -> EmbeddingResult:
         vectors = await self.client.embeddings(self.model, [text])
-        return EmbeddingResult(vector=vectors[0], text=text)
+        vector = vectors[0]
+        if not vector or not all(math.isfinite(value) for value in vector):
+            raise ValueError("embedding service returned an invalid vector")
+        if self.expected_dimension and len(vector) != self.expected_dimension:
+            raise ValueError(
+                f"embedding dimension mismatch: expected {self.expected_dimension}, "
+                f"got {len(vector)}"
+            )
+        return EmbeddingResult(vector=vector, text=text)
 
     async def embed_query(self, text: str) -> EmbeddingResult:
-        return await self.embed(f"search_query: {text}")
+        if not self.query_instruction:
+            return await self.embed(text)
+        return await self.embed(f"Instruct: {self.query_instruction}\nQuery: {text}")
 
     async def embed_document(self, text: str) -> EmbeddingResult:
-        return await self.embed(f"search_document: {text}")
+        return await self.embed(text)

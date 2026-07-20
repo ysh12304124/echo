@@ -34,9 +34,14 @@ class Settings(BaseSettings):
     llm_model: str = "qwen2.5"
     llm_api_key: str = "not-needed"
 
-    embedding_base_url: str = "http://localhost:8004/v1"
-    embedding_model: str = "bge-m3"
+    embedding_base_url: str = "http://192.168.0.100:11434/v1"
+    embedding_model: str = "qwen3-embedding:0.6b-q4_k_m"
+    embedding_dimension: int = 1024
     embedding_api_key: str = "not-needed"
+    embedding_query_instruction: str = (
+        "Given a question about the user's work memories, retrieve evidence passages "
+        "that directly answer the question"
+    )
 
     # 算力服务（compute/，独立进程，同机 localhost 通信）。
     # compute_provider_mode 独立于 provider_mode：默认 mock，即使 provider_mode=local 也不会
@@ -97,7 +102,10 @@ class ProviderFactory:
 
             s = self.settings
             return LocalEmbeddingProvider(
-                self._client(s.embedding_base_url, s.embedding_api_key), s.embedding_model
+                self._client(s.embedding_base_url, s.embedding_api_key),
+                s.embedding_model,
+                s.embedding_query_instruction,
+                s.embedding_dimension,
             )
         return MockEmbeddingProvider()
 
@@ -106,7 +114,11 @@ class ProviderFactory:
             if self._is_local:
                 from app.providers.sqlite_vector import SqliteVectorStore
 
-                self._vector_store = SqliteVectorStore(self.settings.vector_db_path)
+                self._vector_store = SqliteVectorStore(
+                    self.settings.vector_db_path,
+                    self.settings.embedding_model,
+                    self.settings.embedding_dimension,
+                )
             else:
                 self._vector_store = InMemoryVectorStore()
         return self._vector_store

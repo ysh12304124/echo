@@ -5,25 +5,12 @@ from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.providers.base import (
-    ASRProvider,
-    BlobStore,
-    EmbeddingProvider,
-    LLMProvider,
-    OCRProvider,
-    ReconstructionProvider,
-    VectorStore,
-    VisionProvider,
-)
+from app.providers.base import BlobStore, EmbeddingProvider, LLMProvider, VectorStore
 from app.providers.mock.providers import (
     InMemoryVectorStore,
     LocalBlobStore,
-    MockASRProvider,
     MockEmbeddingProvider,
     MockLLMProvider,
-    MockOCRProvider,
-    MockReconstructionProvider,
-    MockVisionProvider,
 )
 
 
@@ -40,21 +27,19 @@ class Settings(BaseSettings):
     llm_model: str = "qwen2.5"
     llm_api_key: str = "not-needed"
 
-    vlm_base_url: str = "http://localhost:8002/v1"
-    vlm_model: str = "qwen2.5-vl"
-    vlm_api_key: str = "not-needed"
-
-    asr_base_url: str = "http://localhost:8003/v1"
-    asr_model: str = "whisper-1"
-    asr_api_key: str = "not-needed"
-    asr_language: Optional[str] = "zh"
-
     embedding_base_url: str = "http://localhost:8004/v1"
     embedding_model: str = "bge-m3"
     embedding_api_key: str = "not-needed"
 
-    # 3D 重建服务（可选，未配置则用 mock 关键帧分析）
-    reconstruction_base_url: Optional[str] = None
+    # 算力服务（compute/，独立进程，同机 localhost 通信）。
+    # compute_provider_mode 独立于 provider_mode：默认 mock，即使 provider_mode=local 也不会
+    # 在测试/离线环境里真的发网络请求；只有显式设为 http 才会真的提交给 compute_base_url。
+    compute_provider_mode: str = "mock"  # mock | http
+    compute_base_url: str = "http://127.0.0.1:8100"
+    # 算力服务回调后台时使用的地址；后台自己生成 callback_url 时用这个拼接。
+    public_callback_base_url: str = "http://127.0.0.1:8000"
+    # 后台 /internal/* 回调路由与算力服务提交请求之间约定的共享密钥，仅做简单头校验。
+    internal_token: str = "echo-internal-dev-token"
 
 
 @lru_cache
@@ -72,32 +57,6 @@ class ProviderFactory:
         from app.providers.local.openai_client import OpenAICompatClient
 
         return OpenAICompatClient(base_url=base_url, api_key=api_key)
-
-    def asr(self) -> ASRProvider:
-        if self._is_local:
-            from app.providers.local.providers import WhisperASRProvider
-
-            s = self.settings
-            return WhisperASRProvider(
-                self._client(s.asr_base_url, s.asr_api_key), s.asr_model, s.asr_language
-            )
-        return MockASRProvider()
-
-    def vision(self) -> VisionProvider:
-        if self._is_local:
-            return self._vlm()
-        return MockVisionProvider()
-
-    def ocr(self) -> OCRProvider:
-        if self._is_local:
-            return self._vlm()
-        return MockOCRProvider()
-
-    def _vlm(self):
-        from app.providers.local.providers import LocalVLMProvider
-
-        s = self.settings
-        return LocalVLMProvider(self._client(s.vlm_base_url, s.vlm_api_key), s.vlm_model)
 
     def llm(self) -> LLMProvider:
         if self._is_local:
@@ -131,9 +90,6 @@ class ProviderFactory:
 
     def blob_store(self) -> BlobStore:
         return LocalBlobStore(self.settings.blob_storage_path)
-
-    def reconstruction(self) -> ReconstructionProvider:
-        return MockReconstructionProvider()
 
 
 _provider_factory: Optional[ProviderFactory] = None

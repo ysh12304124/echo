@@ -2,7 +2,14 @@ package com.echo.glasses
 
 import android.content.IntentFilter
 import android.graphics.Color
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.Base64
 import android.util.Log
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -11,195 +18,210 @@ import com.echo.glasses.receiver.KeyReceiver
 import com.echo.glasses.receiver.KeyType
 import com.rokid.cxr.CXRServiceBridge
 import com.rokid.cxr.Caps
+import java.util.UUID
+import java.util.concurrent.Executors
 
-/**
- * 眼镜端 Echo CustomApp：记忆控制中心。
- *
- * 交互（记忆完全由眼镜端主导）：
- *  - 进入后看到 3 个场景 Onsite / Meeting / Quality Time，默认选中 Onsite；
- *  - 待机时：滑动（双指前/后滑）在三个场景间切换选中项；
- *  - 单击选中的场景 → 启动记忆，上报 START(scene)，另两个场景置灰（不可选）；
- *  - 再次单击该场景 → 结束记忆，上报 STOP，另两个场景恢复可选。
- *
- * 显示：选择界面整体逆时针旋转 90°，以适配眼镜镜片显示方向。
- * 采集（音频/拍照）由眼镜固件经 CXR-L 直接送手机，本应用不采集媒体。
- */
 class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val TAG = "ECHO_GLASS"
         const val CMD_KEY = "rk_custom_key"
         const val CLIENT_KEY = "rk_custom_client"
+        const val CHUNK = 50 * 1024
+        const val IMU_INTERVAL_MS = 1000L
+        const val MAX_SEND_RETRY = 5
+        const val SEND_RETRY_DELAY_MS = 150L
     }
 
-    /** 记忆场景，cmd 需与手机端 TimeScene 名称一致。 */
     private enum class Scene(val cmd: String, val label: String) {
-        ONSITE("ONSITE", "Onsite"),
-        MEETING("MEETING", "Meeting"),
-        QUALITY_TIME("QUALITY_TIME", "Quality Time"),
+        ONSITE("ONSITE", "Onsite"), MEETING("MEETING", "Meeting"), QUALITY_TIME("QUALITY_TIME", "Quality"),
     }
 
     private val scenes = Scene.values()
-    private var selected = Scene.ONSITE.ordinal
-    private var recording = false
+    private var sel = Scene.ONSITE.ordinal
+    private var rec = false
+    private var sid = ""
+    private var spaceOn = false
+    private var conn = false
+    private var videoChunkIndex = 0
+    private lateinit var vr: VideoRecorder
 
     private val bridge = CXRServiceBridge()
-    private lateinit var statusText: TextView
-    private lateinit var hintText: TextView
-    private lateinit var cloudText: TextView
-    private lateinit var sceneViews: List<TextView>
+    private lateinit var st: TextView; private lateinit var ht: TextView
+    private lateinit var ct: TextView
+    private lateinit var spaceTag: TextView
+    private lateinit var sv: List<TextView>
+    private val kr = KeyReceiver(KeyEventListener { onKey(it) })
+    private val upExec = Executors.newSingleThreadExecutor()
 
-    private val keyReceiver = KeyReceiver(KeyEventListener { keyType -> onKey(keyType) })
-
-    private val statusListener = object : CXRServiceBridge.StatusListener {
-        override fun onConnected(p0: String?, p1: String?, p2: Int) {
-            Log.i(TAG, "bridge onConnected p0=$p0 p1=$p1 p2=$p2"); runOnUiThread { cloudText.text = "手机已连接" }
-        }
-        override fun onDisconnected() {
-            Log.i(TAG, "bridge onDisconnected"); runOnUiThread { cloudText.text = "手机已断开" }
-        }
-        override fun onConnecting(p0: String?, p1: String?, p2: Int) {}
-        override fun onARTCStatus(p0: Float, p1: Boolean) {}
-        override fun onRokidAccountChanged(p0: String?) {}
-        override fun onAudioNoise(p0: Float) {}
+    // ---- IMU(空间记忆开启时 1Hz 采样发送) ----
+    private lateinit var sm: SensorManager
+    private var ac: Sensor? = null; private var gy: Sensor? = null
+    private var ia = false
+    private var lax=0f; private var lay=0f; private var laz=0f
+    private var lgx=0f; private var lgy=0f; private var lgz=0f
+    private val imuHandler = Handler(Looper.getMainLooper())
+    private val imuTask = object : Runnable {
+        override fun run() { sendImu(); if (spaceOn) imuHandler.postDelayed(this, IMU_INTERVAL_MS) }
     }
 
-    // 手机端经 rk_custom_client 回传的处理进度（如"上传完成"），仅作提示展示。
-    private val msgCallback = object : CXRServiceBridge.MsgCallback {
-        override fun onReceive(name: String?, args: Caps?, bytes: ByteArray?) {
-            val text = args?.let { readLastString(it) }.orEmpty()
-            Log.d(TAG, "onReceive text=$text")
-            if (text.isNotBlank()) runOnUiThread { cloudText.text = "云端: $text" }
+    private val il = object : SensorEventListener {
+        override fun onSensorChanged(e: SensorEvent) {
+            when (e.sensor.type) {
+                Sensor.TYPE_ACCELEROMETER -> { lax=e.values[0]; lay=e.values[1]; laz=e.values[2] }
+                Sensor.TYPE_GYROSCOPE -> { lgx=e.values[0]; lgy=e.values[1]; lgz=e.values[2] }
+            }
+        }
+        override fun onAccuracyChanged(s: Sensor, a: Int) {}
+    }
+
+    private fun startImuSensors() { if (ia) return; ac=sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER); gy=sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE); if(ac==null||gy==null){Log.w(TAG,"no IMU");return}; sm.registerListener(il,ac,SensorManager.SENSOR_DELAY_GAME); sm.registerListener(il,gy,SensorManager.SENSOR_DELAY_GAME); ia=true }
+    private fun stopImuSensors() { if(!ia)return; sm.unregisterListener(il); ia=false }
+    // sendImu 由主线程 Handler 定时触发，sendCmd 内部可能 sleep 重试，必须丢到 upExec 后台线程执行，避免阻塞主线程/UI。
+    private fun sendImu() { if(!spaceOn||!ia||!conn)return; val caps = Caps().apply { write("imu"); write(lax.toString()); write(lay.toString()); write(laz.toString()); write(lgx.toString()); write(lgy.toString()); write(lgz.toString()); write(System.currentTimeMillis().toString()) }; upExec.execute { sendCmd(caps, "imu") } }
+
+    private fun toggleSpace() {
+        spaceOn = !spaceOn
+        if (spaceOn) { startImuSensors(); imuHandler.postDelayed(imuTask, IMU_INTERVAL_MS) }
+        else { imuHandler.removeCallbacks(imuTask); stopImuSensors() }
+        Log.i(TAG, "space memory = $spaceOn")
+        // 主动上报开关状态，供手机端实时展示"3D记忆已开启/关闭"，不依赖 IMU 数据流的到达间接推断。
+        upExec.execute { sendCmd(Caps().apply { write("space_state"); write(if (spaceOn) "on" else "off") }, "space_state") }
+        render()
+    }
+
+    private val sl = object : CXRServiceBridge.StatusListener {
+        override fun onConnected(p0:String?,p1:String?,p2:Int) { conn=true; runOnUiThread{ct.text="手机已连接"} }
+        override fun onDisconnected() { conn=false; runOnUiThread{ct.text="手机已断开"} }
+        override fun onConnecting(p0:String?,p1:String?,p2:Int) {}
+        override fun onARTCStatus(p0:Float,p1:Boolean) {}
+        override fun onRokidAccountChanged(p0:String?) {}
+        override fun onAudioNoise(p0:Float) {}
+    }
+
+    private val mc = object : CXRServiceBridge.MsgCallback {
+        override fun onReceive(name:String?,args:Caps?,bytes:ByteArray?) {
+            if(args==null||args.size()<2)return
+            val tag=args.at(0).let{if(it.type()== Caps.Value.TYPE_STRING)it.string else null}?:return
+            val text=args.at(1).let{if(it.type()== Caps.Value.TYPE_STRING)it.string else null}?:return
+            when(tag) {
+                "status"->runOnUiThread{ct.text="云端: $text"}
+                "memory_complete"->{ Log.i(TAG, "memory_complete sid=$text (暂不删除本地视频,便于测试对照)") }
+            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-        statusText = findViewById(R.id.statusText)
-        hintText = findViewById(R.id.hintText)
-        cloudText = findViewById(R.id.cloudText)
-        sceneViews = listOf(
-            findViewById(R.id.sceneOnsite),
-            findViewById(R.id.sceneMeeting),
-            findViewById(R.id.sceneQuality),
-        )
-        // 单击场景选项：启动/结束该场景的记忆。
-        sceneViews.forEachIndexed { i, tv -> tv.setOnClickListener { onSceneTap(i) } }
-
-        bridge.setStatusListener(statusListener)
-        val subRet = bridge.subscribe(CLIENT_KEY, msgCallback)
-        Log.i(
-            TAG,
-            "bridge 初始化 subscribe($CLIENT_KEY)=$subRet " +
-                "错误码定义 EINVAL=${CXRServiceBridge.EINVAL} EDUP=${CXRServiceBridge.EDUP} " +
-                "EFAULT=${CXRServiceBridge.EFAULT} EBUSY=${CXRServiceBridge.EBUSY}",
-        )
-
-        registerReceiver(keyReceiver, IntentFilter().apply {
+        super.onCreate(savedInstanceState); setContentView(R.layout.activity_main)
+        // 屏幕息屏会触发 CXR 会话 onSessionPause(SESSION_SCREEN_OFF)，导致录制过程中指令通道被打断，
+        // 常驻常亮以降低该情况出现概率（用于排查"眼镜发了但手机没收到"问题）。
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        sm = getSystemService(SENSOR_SERVICE) as SensorManager
+        vr = VideoRecorder(this).apply {
+            onChunk = { bytes -> sendVideoChunk(bytes) }
+            onHeaderPatch = { bytes -> sendVideoPatch(bytes) }
+            onVideoEnd = { filename -> sendVideoEnd(filename) }
+        }
+        st=findViewById(R.id.statusText); ht=findViewById(R.id.hintText)
+        ct=findViewById(R.id.cloudText)
+        spaceTag=findViewById(R.id.spaceTag)
+        sv=listOf(findViewById(R.id.sceneOnsite),findViewById(R.id.sceneMeeting),findViewById(R.id.sceneQuality))
+        sv.forEachIndexed{i,tv->tv.setOnClickListener{onTap(i)}}
+        bridge.setStatusListener(sl); bridge.subscribe(CLIENT_KEY, mc)
+        registerReceiver(kr, IntentFilter().apply {
             addAction(KeyType.CLICK.action)
             addAction(KeyType.TWO_FINGER_SWIPE_FORWARD.action)
             addAction(KeyType.TWO_FINGER_SWIPE_BACK.action)
+            addAction(KeyType.TWO_FINGER_LONG_PRESS.action)
         })
-
         render()
-        Log.i(TAG, "Echo 眼镜端启动，已订阅 $CLIENT_KEY 并注册按键；默认场景=${scenes[selected].cmd}")
+        Log.i(TAG, "Echo start")
     }
 
     override fun onDestroy() {
-        runCatching { unregisterReceiver(keyReceiver) }
-        super.onDestroy()
+        imuHandler.removeCallbacks(imuTask); stopImuSensors()
+        vr.destroy(); upExec.shutdown(); runCatching{unregisterReceiver(kr)}; super.onDestroy()
     }
 
-    private fun onKey(keyType: KeyType) {
-        Log.i(TAG, "onKey ${keyType.name} recording=$recording")
-        when (keyType) {
-            // 单击选中场景：待机→启动；记忆中→结束。
-            KeyType.CLICK -> if (recording) stopMemory() else startMemory()
-            // 滑动切换选中场景（仅待机时）。
-            KeyType.TWO_FINGER_SWIPE_FORWARD -> cycleScene(1)
-            KeyType.TWO_FINGER_SWIPE_BACK -> cycleScene(-1)
-            else -> {}
+    private fun sendVideoChunk(bytes: ByteArray) {
+        upExec.execute {
+            var offset = 0
+            while (offset < bytes.size) {
+                val end = minOf(offset + CHUNK, bytes.size)
+                val b64 = Base64.encodeToString(bytes, offset, end - offset, Base64.NO_WRAP)
+                val idx = videoChunkIndex++
+                sendCmd(Caps().apply { write("video_chunk"); write(sid); write(idx.toString()); write(b64) }, "video_chunk#$idx")
+                offset = end
+            }
         }
     }
 
-    /** 点选某场景选项：待机→启动该场景；记忆中且为当前场景→结束；否则忽略（置灰）。 */
-    private fun onSceneTap(index: Int) {
-        if (!recording) {
-            selected = index
-            startMemory()
-        } else if (index == selected) {
-            stopMemory()
+    /** 用录制结束后重读的最终文件头部覆盖之前边录边发时的旧头部(见 VideoRecorder.HEADER_PATCH_BYTES)。 */
+    private fun sendVideoPatch(bytes: ByteArray) {
+        upExec.execute {
+            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+            sendCmd(Caps().apply { write("video_patch"); write(sid); write("0"); write(b64) }, "video_patch")
+            Log.i(TAG, "video_patch sent: ${bytes.size} bytes")
         }
     }
 
-    private fun cycleScene(delta: Int) {
-        if (recording) return // 记忆中不允许切换场景
-        selected = ((selected + delta) % scenes.size + scenes.size) % scenes.size
-        Log.i(TAG, "切换场景 -> ${scenes[selected].cmd}")
-        render()
+    private fun sendVideoEnd(filename: String) {
+        upExec.execute {
+            sendCmd(Caps().apply { write("video_end"); write(sid); write(filename) }, "video_end")
+            Log.i(TAG, "video_end sent: $filename chunks=$videoChunkIndex")
+        }
     }
 
-    private fun startMemory() {
-        recording = true
-        val scene = scenes[selected]
-        val ret = bridge.sendMessage(CMD_KEY, Caps().apply {
-            write("cmd"); write("START"); write(scene.cmd)
-        })
-        Log.i(TAG, "发送 START ${scene.cmd} -> sendMessage($CMD_KEY) 返回=$ret (0=成功,负值=失败)")
-        render()
+    private fun onKey(k: KeyType) {
+        when (k) {
+            KeyType.CLICK -> if (rec) stop() else start()
+            KeyType.TWO_FINGER_SWIPE_FORWARD -> cycle(1)
+            KeyType.TWO_FINGER_SWIPE_BACK -> cycle(-1)
+            // 双击(DOUBLE_CLICK)被系统占用为退出当前程序,单指长按被系统AI助手占用,双指单击实测难触发,双指双击也不理想,改用双指长按切换空间记忆。
+            KeyType.TWO_FINGER_LONG_PRESS -> toggleSpace()
+        }
+    }
+    /** 统一发送并记录 CXRServiceBridge.sendMessage 的返回码。实测 ret=-3 集中出现在系统AI/息屏
+     * 抢占本应用前台(CXR会话SESSION_AI_START/SESSION_SCREEN_OFF)期间——此时底层指令通道未就绪，
+     * 是"短暂性"失败，恢复前台后通常能恢复发送。因此这里做有限次数的阻塞重试再放弃，避免一次抢占
+     * 就永久丢失若干视频分片。必须在后台线程(upExec)调用，不可在主线程调用(内部会 sleep)。 */
+    private fun sendCmd(caps: Caps, label: String) {
+        var ret = bridge.sendMessage(CMD_KEY, caps)
+        var attempt = 0
+        while (ret != 0 && attempt < MAX_SEND_RETRY) {
+            attempt++
+            Log.w(TAG, "$label sendMessage ret=$ret，${SEND_RETRY_DELAY_MS}ms 后重试(第${attempt}次)")
+            try { Thread.sleep(SEND_RETRY_DELAY_MS) } catch (_: InterruptedException) {}
+            ret = bridge.sendMessage(CMD_KEY, caps)
+        }
+        if (ret != 0) Log.e(TAG, "$label sendMessage 重试${attempt}次后仍失败 ret=$ret 本条丢弃")
+        else if (attempt > 0) Log.i(TAG, "$label sendMessage 重试第${attempt}次后成功")
     }
 
-    private fun stopMemory() {
-        recording = false
-        val ret = bridge.sendMessage(CMD_KEY, Caps().apply {
-            write("cmd"); write("STOP")
-        })
-        Log.i(TAG, "发送 STOP -> sendMessage($CMD_KEY) 返回=$ret (0=成功,负值=失败)")
-        render()
+    private fun onTap(i: Int) { if(!rec){sel=i;start()} else if(i==sel)stop() }
+    private fun cycle(d: Int) { if(rec)return; sel=((sel+d)%scenes.size+scenes.size)%scenes.size; render() }
+
+    private fun start() {
+        rec=true; sid=UUID.randomUUID().toString(); videoChunkIndex = 0
+        val sc=scenes[sel]; vr.start(sc.label)
+        val caps = Caps().apply{write("cmd");write("START");write(sc.cmd);write(sid)}
+        upExec.execute { sendCmd(caps, "START") }
+        Log.i(TAG, "START ${sc.cmd} $sid"); render()
+    }
+
+    private fun stop() {
+        rec=false; val sc=scenes[sel]; vr.stop()
+        val caps = Caps().apply{write("cmd");write("STOP");write(sid)}
+        upExec.execute { sendCmd(caps, "STOP") }
+        Log.i(TAG, "STOP ${sc.cmd} $sid"); render()
     }
 
     private fun render() {
-        sceneViews.forEachIndexed { i, tv ->
-            val active = i == selected
-            when {
-                // 记忆中：选中场景高亮，其它两个置灰且不可点。
-                recording && active -> {
-                    tv.setTextColor(Color.WHITE)
-                    tv.setBackgroundColor(Color.parseColor("#3D5AFE"))
-                }
-                recording && !active -> {
-                    tv.setTextColor(Color.parseColor("#555555"))
-                    tv.setBackgroundColor(Color.TRANSPARENT)
-                }
-                // 待机：选中场景高亮，其它两个可选。
-                active -> {
-                    tv.setTextColor(Color.WHITE)
-                    tv.setBackgroundColor(Color.parseColor("#3D5AFE"))
-                }
-                else -> {
-                    tv.setTextColor(Color.parseColor("#AAAAAA"))
-                    tv.setBackgroundColor(Color.TRANSPARENT)
-                }
-            }
-            // 记忆中仅允许点当前场景（用于结束），其它置灰不可点。
-            tv.isEnabled = !recording || active
-        }
-        if (recording) {
-            statusText.text = "记忆中 · ${scenes[selected].label}"
-            hintText.text = "单击结束记忆"
-        } else {
-            statusText.text = "待机 · ${scenes[selected].label}"
-            hintText.text = "滑动切换场景 · 单击启动记忆"
-        }
-    }
-
-    private fun readLastString(caps: Caps): String {
-        var last = ""
-        for (i in 0 until caps.size()) {
-            val v = caps.at(i)
-            if (v.type() == Caps.Value.TYPE_STRING) last = v.string
-        }
-        return last
+        val cc = mapOf(0 to "#10B981", 1 to "#2563EB", 2 to "#7C3AED")
+        sv.forEachIndexed{i,tv->val a=i==sel; tv.setTextColor(if(rec&&a||a)Color.WHITE else if(rec)Color.parseColor("#555555") else Color.parseColor("#AAAAAA")); tv.setBackgroundColor(if(rec&&a||a)Color.parseColor(cc[i]?:("#3D5AFE")) else Color.TRANSPARENT); tv.isEnabled=!rec||a}
+        st.text=if(rec)"记忆中 · ${scenes[sel].label}" else "待机 · ${scenes[sel].label}"
+        ht.text=if(rec)"单击结束记忆" else "滑动切换场景 · 单击启动记忆 · 双指长按切换空间记忆"
+        spaceTag.text=if(spaceOn)"空间记忆启动，imu记录中" else "空间记忆"
+        spaceTag.setTextColor(if(spaceOn)Color.parseColor("#F59E0B") else Color.parseColor("#555555"))
     }
 }

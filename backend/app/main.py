@@ -2,6 +2,9 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
@@ -49,6 +52,15 @@ async def log_requests(request: Request, call_next):
         dur_ms,
     )
     return response
+
+# 静态文件路由：通过路由提供 data 目录文件（经过 CORS 中间件）
+@app.get("/data/{file_path:path}")
+async def serve_data_file(file_path: str):
+    full = os.path.join("data", file_path)
+    if not os.path.exists(full):
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"detail": "not found"}, status_code=404)
+    return FileResponse(full)
 
 app.add_middleware(
     CORSMiddleware,

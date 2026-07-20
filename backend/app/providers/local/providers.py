@@ -1,29 +1,20 @@
 """本地模型 Provider 实现，基于 OpenAI 兼容接口。
 
 - LocalLLMProvider：文本推理（事件/实体抽取、导航摘要、证据接地问答）
-- LocalVLMProvider：多模态视觉（图片摘要 + OCR），同时实现 VisionProvider 与 OCRProvider
-- WhisperASRProvider：语音转写（带时间戳分段）
 - LocalEmbeddingProvider：文本向量
+
+语音转写(ASR)与视觉(VLM/OCR)已迁到 compute/ 算力服务的异步分析管线，
+不再需要本地 provider 实现，见 docs/protocols/compute-service.md。
 """
 
 from __future__ import annotations
 
 from app.providers.base import (
-    ASRProvider,
     EmbeddingProvider,
     EmbeddingResult,
     LLMProvider,
-    OCRProvider,
-    OCRResult,
-    TranscriptSegment,
-    VisionProvider,
-    VisionResult,
 )
-from app.providers.local.openai_client import (
-    OpenAICompatClient,
-    encode_image_data_url,
-    parse_json_loose,
-)
+from app.providers.local.openai_client import OpenAICompatClient, parse_json_loose
 
 # 时间记忆各场景的关键瞬间触发类型（对齐产品文档 5.x）
 SCENE_EVENT_TYPES = {
@@ -156,152 +147,6 @@ class LocalLLMProvider(LLMProvider):
         )
         parsed = parse_json_loose(content)
         return parsed if isinstance(parsed, dict) else {}
-
-
-class LocalVLMProvider(VisionProvider, OCRProvider):
-    def __init__(self, client: OpenAICompatClient, model: str):
-        self.client = client
-        self.model = model
-
-    async def analyze_frame(self, image_path: str) -> VisionResult:
-        data_url = encode_image_data_url(image_path)
-        system = (
-            "描述这张第一视角画面里对记忆检索有价值的内容(人物、白板/屏幕、设备、物体、场景)。"
-            "输出 JSON: {\"summary\": \"一句话描述\", \"is_informative\": true, \"labels\": [\"\"]}。"
-            "若画面模糊/无信息/纯背景，is_informative 设为 false。"
-        )
-        content = await self.client.chat(
-            self.model,
-            [
-                {"role": "system", "content": system},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "分析这张画面。"},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                },
-            ],
-            temperature=0.2,
-            response_format={"type": "json_object"},
-        )
-        parsed = parse_json_loose(content)
-        if isinstance(parsed, dict):
-            return VisionResult(
-                summary=parsed.get("summary", ""),
-                is_informative=bool(parsed.get("is_informative", True)),
-                labels=parsed.get("labels", []) or [],
-            )
-        return VisionResult(summary=content.strip()[:200], is_informative=True)
-
-    async def should_keep_frame(self, image_path: str) -> bool:
-        result = await self.analyze_frame(image_path)
-        return result.is_informative
-
-    async def summarize_session(self, transcript: str, image_path: str | None) -> dict:
-        """全量转写 + 首帧图片 → 人物数量 / 所在空间 / 语音内容总结。"""
-        system = (
-            "你是识境 Echo 的记忆助手。根据给定的一段第一视角图片与语音转写，"
-            "总结这段记忆。只依据给定内容，不臆测。"
-            "输出 JSON: {\"person_count\": 画面中的人物数量(整数), "
-            "\"space\": \"所在空间的简短描述\", "
-            "\"voice_summary\": \"语音内容的总结\"}。"
-        )
-        user_content: list[dict] = [
-            {"type": "text", "text": f"语音转写:\n{transcript or '(无语音)'}"},
-        ]
-        if image_path:
-            user_content.append(
-                {"type": "image_url", "image_url": {"url": encode_image_data_url(image_path)}}
-            )
-        content = await self.client.chat(
-            self.model,
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=0.2,
-            response_format={"type": "json_object"},
-        )
-        parsed = parse_json_loose(content)
-        if not isinstance(parsed, dict):
-            return {"person_count": 0, "space": "", "voice_summary": content.strip()}
-        try:
-            person_count = int(parsed.get("person_count", 0) or 0)
-        except (TypeError, ValueError):
-            person_count = 0
-        return {
-            "person_count": person_count,
-            "space": (parsed.get("space") or "").strip(),
-            "voice_summary": (parsed.get("voice_summary") or "").strip(),
-        }
-
-    async def extract_text(self, image_path: str) -> OCRResult:
-        data_url = encode_image_data_url(image_path)
-        system = (
-            "识别画面中所有清晰可读的文字(铭牌、标签、名片、屏幕、白板、展板等)。"
-            "输出 JSON: {\"text\": \"识别到的文字，无则空\", \"confidence\": 0.0-1.0}。"
-        )
-        content = await self.client.chat(
-            self.model,
-            [
-                {"role": "system", "content": system},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "提取文字。"},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                },
-            ],
-            temperature=0.0,
-            response_format={"type": "json_object"},
-        )
-        parsed = parse_json_loose(content)
-        if isinstance(parsed, dict):
-            try:
-                conf = float(parsed.get("confidence", 0.0))
-            except (TypeError, ValueError):
-                conf = 0.0
-            return OCRResult(text=(parsed.get("text") or "").strip(), confidence=conf)
-        return OCRResult(text="", confidence=0.0)
-
-
-class WhisperASRProvider(ASRProvider):
-    def __init__(self, client: OpenAICompatClient, model: str, language: str | None = None):
-        self.client = client
-        self.model = model
-        self.language = language
-
-    async def transcribe(self, audio_path: str) -> list[TranscriptSegment]:
-        data = await self.client.transcribe(self.model, audio_path, self.language)
-        segments = data.get("segments") or []
-        result: list[TranscriptSegment] = []
-        for seg in segments:
-            text = (seg.get("text") or "").strip()
-            if not text:
-                continue
-            # whisper 的 avg_logprob 越接近 0 越可信；映射到 [0,1] 粗略置信度
-            avg_logprob = seg.get("avg_logprob")
-            confidence = 1.0
-            if isinstance(avg_logprob, (int, float)):
-                confidence = max(0.0, min(1.0, 1.0 + avg_logprob / 5.0))
-            result.append(
-                TranscriptSegment(
-                    text=text,
-                    start_ms=int((seg.get("start") or 0.0) * 1000),
-                    end_ms=int((seg.get("end") or 0.0) * 1000),
-                    speaker_id=None,
-                    confidence=confidence,
-                )
-            )
-        if not result and data.get("text"):
-            result.append(
-                TranscriptSegment(
-                    text=data["text"].strip(), start_ms=0, end_ms=0, confidence=0.9
-                )
-            )
-        return result
 
 
 class LocalEmbeddingProvider(EmbeddingProvider):

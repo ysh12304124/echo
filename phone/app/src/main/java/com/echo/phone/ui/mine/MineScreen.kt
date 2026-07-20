@@ -36,6 +36,7 @@ fun MineScreen(
     onNavigateDevice: () -> Unit,
     onNavigateStorage: () -> Unit,
     onNavigateHelp: () -> Unit,
+    onNavigateFavorites: () -> Unit,
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as EchoApplication
@@ -61,6 +62,8 @@ fun MineScreen(
 
         FadeInItem(1) {
             GlassSection {
+                MineItem(Icons.Default.Star, "收藏", "已收藏的记忆与空间", onClick = onNavigateFavorites)
+                HorizontalDivider(color = GlassBorder)
                 MineItem(Icons.Default.Storage, "存储与隐私", "删除、导出、权限管理", onClick = onNavigateStorage)
                 HorizontalDivider(color = GlassBorder)
                 MineItem(Icons.Default.Help, "帮助说明", "LED 含义、查询范围说明", onClick = onNavigateHelp)

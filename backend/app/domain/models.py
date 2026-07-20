@@ -122,8 +122,22 @@ class SpaceMemory(BaseModel):
     anchors: list[SpaceAnchor] = Field(default_factory=list)
     captured_at: Optional[datetime] = None
     identify_brief: str = ""
+    scene_summary: Optional[str] = None
+    model_format: Optional[str] = None
+    loop_angle: Optional[float] = None
     is_favorited: bool = False
     session_id: Optional[UUID] = None
+    scene_type: Optional[str] = None
+    poses_url: Optional[str] = None
+    poses_sha256: Optional[str] = None
+    pose_count: Optional[int] = None
+    anchor_url: Optional[str] = None
+    anchor_sha256: Optional[str] = None
+    anchor_method: Optional[str] = None
+    recording_duration_sec: float = 0.0
+    anchor_position_x: float = 0.0
+    anchor_position_y: float = 0.0
+    anchor_position_z: float = 0.0
 
 
 class IngestSession(BaseModel):
@@ -137,3 +151,14 @@ class IngestSession(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     frame_count: int = 0
     audio_chunk_count: int = 0
+    video_path: Optional[str] = None
+
+
+class ImuSample(BaseModel):
+    ax: float
+    ay: float
+    az: float
+    gx: float
+    gy: float
+    gz: float
+    timestamp_ms: int

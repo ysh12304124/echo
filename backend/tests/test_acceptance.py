@@ -20,6 +20,26 @@ async def client():
         yield ac
 
 
+async def _upload_video(client: AsyncClient, session_id: str, filename: str = "Meeting_20260716142825_20260716143123.mp4"):
+    """模拟眼镜边录边发：分两片上传，最后一片带 filename 且 is_last=true。"""
+    chunk1 = io.BytesIO(b"fake mp4 bytes part1")
+    resp = await client.post(
+        f"/api/v1/ingest/sessions/{session_id}/video",
+        files={"file": ("chunk.bin", chunk1, "application/octet-stream")},
+        data={"index": 0, "is_last": "false"},
+    )
+    assert resp.status_code == 201
+
+    chunk2 = io.BytesIO(b"fake mp4 bytes part2")
+    resp = await client.post(
+        f"/api/v1/ingest/sessions/{session_id}/video",
+        files={"file": ("chunk.bin", chunk2, "application/octet-stream")},
+        data={"index": 1, "is_last": "true", "filename": filename},
+    )
+    assert resp.status_code == 201
+    return resp.json()
+
+
 async def _create_and_complete_meeting(client: AsyncClient, title: str = "Q3经营会"):
     resp = await client.post("/api/v1/ingest/sessions", json={
         "memory_type": "time",
@@ -30,13 +50,7 @@ async def _create_and_complete_meeting(client: AsyncClient, title: str = "Q3经�
     assert resp.status_code == 201
     session_id = resp.json()["session_id"]
 
-    frame = io.BytesIO(b"fake whiteboard image data")
-    resp = await client.post(
-        f"/api/v1/ingest/sessions/{session_id}/frames",
-        files={"file": ("whiteboard.jpg", frame, "image/jpeg")},
-        data={"timestamp_ms": 5000},
-    )
-    assert resp.status_code == 201
+    await _upload_video(client, session_id)
 
     audio = io.BytesIO(b"fake audio pcm data")
     resp = await client.post(
@@ -51,77 +65,73 @@ async def _create_and_complete_meeting(client: AsyncClient, title: str = "Q3经�
     return resp.json()
 
 
+# 视频边录边发：分片不落地转发、按顺序 append，最后一片携带 filename 完成落盘。
 @pytest.mark.asyncio
-async def test_session_frame_image_hosting(client: AsyncClient):
+async def test_video_chunk_upload_and_media_hosting(client: AsyncClient):
     resp = await client.post("/api/v1/ingest/sessions", json={
         "memory_type": "time",
-        "scene": "meeting",
+        "scene": "onsite",
         "partition": "work",
-        "title": "关键帧图床测试",
+        "title": "视频分片测试",
     })
     assert resp.status_code == 201
     session_id = resp.json()["session_id"]
 
-    image_bytes = b"\xff\xd8 key frame bytes \xff\xd9"
+    filename = "Onsite_20260716142825_20260716143123.mp4"
+    ack = await _upload_video(client, session_id, filename)
+    assert ack["filename"] == filename
+    assert ack["media_url"] == f"/api/v1/media/sessions/{session_id}/video/{filename}"
+
+    resp = await client.get(ack["media_url"])
+    assert resp.status_code == 200
+    assert resp.content == b"fake mp4 bytes part1fake mp4 bytes part2"
+
+
+# 空间记忆(IMU)现附加到当前场景 session 下，不再要求独立的 SPACE 会话。
+@pytest.mark.asyncio
+async def test_imu_attached_to_time_session(client: AsyncClient):
+    resp = await client.post("/api/v1/ingest/sessions", json={
+        "memory_type": "time",
+        "scene": "onsite",
+        "partition": "work",
+        "title": "空间记忆附加测试",
+    })
+    session_id = resp.json()["session_id"]
+
     resp = await client.post(
-        f"/api/v1/ingest/sessions/{session_id}/frames",
-        files={"file": ("whiteboard.jpg", io.BytesIO(image_bytes), "image/jpeg")},
-        data={"timestamp_ms": 5000, "is_key_moment": "true"},
+        f"/api/v1/ingest/sessions/{session_id}/imu",
+        json={"samples": [
+            {"ax": 0.1, "ay": 0.2, "az": 9.8, "gx": 0.0, "gy": 0.0, "gz": 0.0, "timestamp_ms": 1000},
+        ]},
     )
     assert resp.status_code == 201
-    data = resp.json()
-    assert data["filename"].endswith(".jpg")
-    assert data["media_url"] == f"/api/v1/ingest/sessions/{session_id}/frames/{data['filename']}"
-
-    resp = await client.get(data["media_url"])
-    assert resp.status_code == 200
-    assert resp.headers["content-type"].startswith("image/jpeg")
-    assert resp.content == image_bytes
-
-    resp = await client.get(f"/api/v1/ingest/sessions/{session_id}/frames")
-    assert resp.status_code == 200
-    frame_list = resp.json()
-    assert frame_list["total"] == 1
-    assert frame_list["items"][0]["filename"] == data["filename"]
-    assert frame_list["items"][0]["media_url"] == data["media_url"]
-
-    resp = await client.get(f"/api/v1/media/sessions/{session_id}/frames/{data['filename']}")
-    assert resp.status_code == 200
-    assert resp.content == image_bytes
+    assert resp.json()["accepted_count"] == 1
 
 
-# 用例1: 会议记录与全局工作查询
+# 用例1: 会议记录 —— store-only 模式下不再自动跑 ASR/VLM，complete 返回最小记忆记录。
 @pytest.mark.asyncio
-async def test_case1_meeting_global_query(client: AsyncClient):
+async def test_case1_meeting_store_only_complete(client: AsyncClient):
     memory = await _create_and_complete_meeting(client)
     memory_id = memory["memory_id"]
+    assert memory["status"] == "completed"
 
     resp = await client.get(f"/api/v1/memories/{memory_id}")
     assert resp.status_code == 200
-    nav = resp.json()["navigation_summary"]
-    assert nav["key_moments"]
-    moment = nav["key_moments"][0]
-    assert moment["description"] == ""
-    assert moment["image_url"].startswith("/api/v1/media/sessions/")
-    assert "imageUrl" not in moment
+    assert resp.json()["status"] == "completed"
 
+    # store-only 模式下该记忆没有生成任何语音证据，限定在该记忆内检索应回退到「没有找到」。
     resp = await client.post("/api/v1/query", json={
         "question": "张经理承诺了什么？",
-        "scope": "global_work",
+        "scope": "memory",
+        "memory_id": memory_id,
     })
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "confirmed"
-    assert data["answer"] is not None
-    assert "周五" in data["answer"] or "方案" in data["answer"]
-    assert len(data["evidences"]) >= 1
-    assert any(e["type"] == "transcript" for e in data["evidences"])
+    assert resp.json()["status"] == "not_found"
 
 
-# 用例2: 现场拜访与当前空间内查询
+# 用例2: 现场拜访 —— 完成后可正常列出/查询（不含拍照/帧上传，已改为视频分片）
 @pytest.mark.asyncio
-async def test_case2_onsite_space_query(client: AsyncClient):
-    # Create onsite memory
+async def test_case2_onsite_completion(client: AsyncClient):
     resp = await client.post("/api/v1/ingest/sessions", json={
         "memory_type": "time",
         "scene": "onsite",
@@ -130,43 +140,20 @@ async def test_case2_onsite_space_query(client: AsyncClient):
     })
     session_id = resp.json()["session_id"]
 
-    frame = io.BytesIO(b"smt device image")
-    await client.post(
-        f"/api/v1/ingest/sessions/{session_id}/frames",
-        files={"file": ("smt_device.jpg", frame, "image/jpeg")},
-        data={"timestamp_ms": 10000},
-    )
+    await _upload_video(client, session_id, "Onsite_20260716100000_20260716100500.mp4")
     audio = io.BytesIO(b"audio")
     await client.post(
         f"/api/v1/ingest/sessions/{session_id}/audio",
         files={"file": ("audio.pcm", audio, "audio/pcm")},
         data={"timestamp_ms": 0},
     )
-    await client.post(f"/api/v1/ingest/sessions/{session_id}/complete")
-
-    # Create space memory
-    resp = await client.post("/api/v1/ingest/sessions", json={
-        "memory_type": "space",
-        "partition": "work",
-        "title": "SMT车间",
-    })
-    space_session = resp.json()["session_id"]
-    for i in range(12):
-        frame = io.BytesIO(f"frame{i}".encode())
-        await client.post(
-            f"/api/v1/ingest/sessions/{space_session}/frames",
-            files={"file": (f"frame{i}.jpg", frame, "image/jpeg")},
-            data={"timestamp_ms": i * 1000},
-        )
-    resp = await client.post(f"/api/v1/ingest/sessions/{space_session}/complete")
-    space_id = resp.json()["memory_id"]
-
-    resp = await client.get(f"/api/v1/spaces/{space_id}")
+    resp = await client.post(f"/api/v1/ingest/sessions/{session_id}/complete")
     assert resp.status_code == 200
-    assert resp.json()["quality"] in ("excellent", "good")
+    assert resp.json()["status"] == "completed"
+    assert resp.json()["scene"] == "onsite"
 
 
-# 用例3: 当前记忆内查询
+# 用例3: 当前记忆内查询（store-only 下无证据，允许 not_found）
 @pytest.mark.asyncio
 async def test_case3_memory_scope_query(client: AsyncClient):
     memory = await _create_and_complete_meeting(client, "测试会议")
@@ -180,8 +167,6 @@ async def test_case3_memory_scope_query(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] in ("confirmed", "possible", "not_found")
-    if data["status"] == "confirmed":
-        assert len(data["evidences"]) >= 1
 
 
 # 用例4: Quality Time 数据分区隔离
@@ -240,23 +225,9 @@ async def test_case5_home_summary_only(client: AsyncClient):
     assert "identify_brief" in item
     assert "title" in item
     assert "scene" in item
-    # Detail with navigation summary is separate endpoint
     detail = await client.get(f"/api/v1/memories/{item['memory_id']}")
     assert detail.status_code == 200
-    assert detail.json().get("navigation_summary") is not None or detail.json()["status"] == "completed"
-
-
-# 用例6: 音频转写文本作为证据
-@pytest.mark.asyncio
-async def test_case6_transcript_as_evidence(client: AsyncClient):
-    memory = await _create_and_complete_meeting(client)
-    resp = await client.post("/api/v1/query", json={
-        "question": "什么时候交方案？",
-        "scope": "global_work",
-    })
-    data = resp.json()
-    if data["status"] == "confirmed":
-        assert any(e["type"] == "transcript" for e in data["evidences"])
+    assert detail.json()["status"] == "completed"
 
 
 # 用例7: 无证据查询
@@ -269,20 +240,6 @@ async def test_case7_no_evidence_query(client: AsyncClient):
     data = resp.json()
     assert data["status"] == "not_found"
     assert data["answer"] is None
-
-
-# 用例8: 低置信人物匹配
-@pytest.mark.asyncio
-async def test_case8_low_confidence_person(client: AsyncClient):
-    memory = await _create_and_complete_meeting(client)
-    resp = await client.post("/api/v1/query", json={
-        "question": "张经理什么时候交方案？",
-        "scope": "global_work",
-    })
-    data = resp.json()
-    assert data["status"] in ("confirmed", "possible")
-    if data["status"] == "confirmed":
-        assert "张经理" in data["answer"] or "周五" in data["answer"]
 
 
 @pytest.mark.asyncio

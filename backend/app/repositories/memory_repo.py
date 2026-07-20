@@ -11,6 +11,7 @@ from app.domain.enums import (
     ConfidenceLevel,
     DataPartition,
     EntityType,
+    EvidenceType,
     MemoryStatus,
     MemoryType,
     TimeScene,
@@ -87,19 +88,24 @@ class MemoryRepository:
             created_at=orm.created_at,
             frame_count=orm.frame_count,
             audio_chunk_count=orm.audio_chunk_count,
+            video_path=orm.video_path,
         )
 
-    async def update_session_frames(self, session_id: UUID, frame_path: str):
+    async def update_session_video(self, session_id: UUID, video_path: str):
         result = await self.db.execute(
             select(SessionORM).where(SessionORM.id == str(session_id))
         )
         orm = result.scalar_one_or_none()
         if orm:
-            paths = _parse_json(orm.frame_paths)
-            paths.append(frame_path)
-            orm.frame_paths = json.dumps(paths)
-            orm.frame_count = len(paths)
+            orm.video_path = video_path
             await self.db.commit()
+
+    async def get_session_video_path(self, session_id: UUID) -> Optional[str]:
+        result = await self.db.execute(
+            select(SessionORM).where(SessionORM.id == str(session_id))
+        )
+        orm = result.scalar_one_or_none()
+        return orm.video_path if orm else None
 
     async def update_session_audio(self, session_id: UUID, audio_path: str):
         result = await self.db.execute(
@@ -275,8 +281,22 @@ class MemoryRepository:
             anchors=json.dumps([a.model_dump(mode="json") for a in memory.anchors]),
             captured_at=memory.captured_at,
             identify_brief=memory.identify_brief,
+            scene_summary=memory.scene_summary,
+            model_format=memory.model_format,
+            loop_angle=memory.loop_angle,
             is_favorited=memory.is_favorited,
             session_id=str(memory.session_id) if memory.session_id else None,
+            scene_type=memory.scene_type,
+            poses_url=memory.poses_url,
+            poses_sha256=memory.poses_sha256,
+            pose_count=memory.pose_count,
+            anchor_url=memory.anchor_url,
+            anchor_sha256=memory.anchor_sha256,
+            anchor_method=memory.anchor_method,
+            recording_duration_sec=memory.recording_duration_sec,
+            anchor_position_x=memory.anchor_position_x,
+            anchor_position_y=memory.anchor_position_y,
+            anchor_position_z=memory.anchor_position_z,
         )
         self.db.add(orm)
         await self.db.commit()
@@ -302,8 +322,22 @@ class MemoryRepository:
             anchors=anchors,
             captured_at=orm.captured_at,
             identify_brief=orm.identify_brief,
+            scene_summary=orm.scene_summary,
+            model_format=orm.model_format,
+            loop_angle=orm.loop_angle,
             is_favorited=orm.is_favorited,
             session_id=UUID(orm.session_id) if orm.session_id else None,
+            scene_type=orm.scene_type,
+            poses_url=orm.poses_url,
+            poses_sha256=orm.poses_sha256,
+            pose_count=orm.pose_count,
+            anchor_url=orm.anchor_url,
+            anchor_sha256=orm.anchor_sha256,
+            anchor_method=orm.anchor_method,
+            recording_duration_sec=orm.recording_duration_sec,
+            anchor_position_x=orm.anchor_position_x,
+            anchor_position_y=orm.anchor_position_y,
+            anchor_position_z=orm.anchor_position_z,
         )
 
     async def list_space_memories(
@@ -360,6 +394,16 @@ class MemoryRepository:
         self.db.add(orm)
         await self.db.commit()
         return evidence
+
+    async def delete_evidences_by_type(self, memory_id: UUID, type: EvidenceType) -> None:
+        """算力回调覆盖式写入前先清掉该类型的旧证据，保证按 memory_id 重跑/重复回调时幂等。"""
+        await self.db.execute(
+            delete(EvidenceORM).where(
+                EvidenceORM.memory_id == str(memory_id),
+                EvidenceORM.type == type.value,
+            )
+        )
+        await self.db.commit()
 
     async def list_evidences(self, memory_id: UUID) -> list[Evidence]:
         result = await self.db.execute(

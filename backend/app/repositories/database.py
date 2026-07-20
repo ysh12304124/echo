@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, select, text
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -28,6 +28,7 @@ class SessionORM(Base):
     audio_chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     frame_paths: Mapped[str] = mapped_column(Text, default="[]")
     audio_paths: Mapped[str] = mapped_column(Text, default="[]")
+    video_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class TimeMemoryORM(Base):
@@ -61,8 +62,22 @@ class SpaceMemoryORM(Base):
     anchors: Mapped[str] = mapped_column(Text, default="[]")
     captured_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     identify_brief: Mapped[str] = mapped_column(String(500), default="")
+    scene_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    model_format: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    loop_angle: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     is_favorited: Mapped[bool] = mapped_column(Boolean, default=False)
     session_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    scene_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    poses_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    poses_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    pose_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    anchor_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    anchor_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    anchor_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    recording_duration_sec: Mapped[float] = mapped_column(Float, default=0.0)
+    anchor_position_x: Mapped[float] = mapped_column(Float, default=0.0)
+    anchor_position_y: Mapped[float] = mapped_column(Float, default=0.0)
+    anchor_position_z: Mapped[float] = mapped_column(Float, default=0.0)
 
 
 class EvidenceORM(Base):
@@ -151,6 +166,18 @@ async def init_db():
         columns = {row[1] for row in result.fetchall()}
         if "key_frames" not in columns:
             await conn.execute(text("ALTER TABLE time_memories ADD COLUMN key_frames TEXT DEFAULT '[]'"))
+        result = await conn.execute(text("PRAGMA table_info(space_memories)"))
+        space_columns = {row[1] for row in result.fetchall()}
+        if "scene_summary" not in space_columns:
+            await conn.execute(text("ALTER TABLE space_memories ADD COLUMN scene_summary TEXT"))
+        if "model_format" not in space_columns:
+            await conn.execute(text("ALTER TABLE space_memories ADD COLUMN model_format TEXT"))
+        if "loop_angle" not in space_columns:
+            await conn.execute(text("ALTER TABLE space_memories ADD COLUMN loop_angle REAL"))
+        result = await conn.execute(text("PRAGMA table_info(ingest_sessions)"))
+        session_columns = {row[1] for row in result.fetchall()}
+        if "video_path" not in session_columns:
+            await conn.execute(text("ALTER TABLE ingest_sessions ADD COLUMN video_path TEXT"))
 
 
 async def get_db() -> AsyncSession:

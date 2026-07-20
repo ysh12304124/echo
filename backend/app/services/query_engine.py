@@ -8,7 +8,7 @@ from app.domain.enums import (
     QueryScope,
 )
 from app.domain.models import Evidence
-from app.providers import ProviderFactory, get_provider_factory
+from app.providers import ProviderFactory, get_provider_factory, get_settings
 from app.providers.base import RerankCandidate
 from app.repositories.memory_repo import MemoryRepository
 from app.schemas import (

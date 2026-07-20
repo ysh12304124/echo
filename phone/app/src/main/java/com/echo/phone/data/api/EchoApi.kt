@@ -91,6 +91,10 @@ interface EchoApiService {
     @POST("query")
     suspend fun query(@Body request: QueryRequest): QueryResponseDto
 
+    @Multipart
+    @POST("query/voice")
+    suspend fun queryVoice(@Part file: MultipartBody.Part): VoiceQueryResponseDto
+
     @GET("persons")
     suspend fun listPersons(@Query("partition") partition: String? = null): PersonListDto
 
@@ -251,6 +255,14 @@ data class QueryResponseDto(
     val uncertainty_reason: String?,
 )
 
+data class VoiceQueryResponseDto(
+    val transcript: String,
+    val asr_avg_logprob: Double?,
+    val asr_accepted: Boolean,
+    val rejection_reason: String?,
+    val result: QueryResponseDto?,
+)
+
 data class PersonListDto(val items: List<PersonSummaryDto>, val total: Int)
 data class PersonSummaryDto(val person_id: String, val name: String, val role: String, val memory_count: Int)
 data class PersonDetailDto(
@@ -397,6 +409,14 @@ fun QueryResponseDto.toDomain() = QueryResult(
         )
     } ?: emptyList(),
     uncertaintyReason = uncertainty_reason,
+)
+
+fun VoiceQueryResponseDto.toDomain() = VoiceQueryResult(
+    transcript = transcript,
+    asrAvgLogprob = asr_avg_logprob,
+    asrAccepted = asr_accepted,
+    rejectionReason = rejection_reason,
+    result = result?.toDomain(),
 )
 
 fun PersonSummaryDto.toDomain() = PersonSummary(

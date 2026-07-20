@@ -8,6 +8,10 @@ android {
     compileSdk = 34
 
     defaultConfig {
+        val apiBaseUrl = providers.gradleProperty("ECHO_API_BASE_URL")
+            .orElse("http://192.168.1.130:8000/api/v1/")
+            .get()
+            .let { if (it.endsWith("/")) it else "$it/" }
         applicationId = "com.echo.phone"
         // Rokid CXR-L SDK 要求 minSdk 31。
         minSdk = 31
@@ -16,7 +20,7 @@ android {
         versionName = "1.0.0"
         // 真机通过局域网访问后台：改成运行 uvicorn 的电脑局域网 IP。
         // 模拟器用 10.0.2.2；真机用电脑 IP（如 192.168.1.130）。
-        buildConfigField("String", "API_BASE_URL", "\"http://192.168.1.130:8000/api/v1/\"")
+        buildConfigField("String", "API_BASE_URL", "\"$apiBaseUrl\"")
 
         // 眼镜端 Echo CustomApp 的包名与入口（须与 glasses/ 模块一致）。
         buildConfigField("String", "GLASS_APP_PACKAGE", "\"com.echo.glasses\"")

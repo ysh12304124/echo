@@ -159,6 +159,14 @@ data class QuerySource(
     val timeOffsetSeconds: Int,
 )
 
+data class VoiceQueryResult(
+    val transcript: String,
+    val asrAvgLogprob: Double?,
+    val asrAccepted: Boolean,
+    val rejectionReason: String?,
+    val result: QueryResult?,
+)
+
 data class SpaceAnchor(
     val anchorId: String,
     val name: String,

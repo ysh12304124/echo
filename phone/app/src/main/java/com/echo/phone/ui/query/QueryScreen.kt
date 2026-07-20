@@ -1,17 +1,56 @@
 package com.echo.phone.ui.query
 
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Notes
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.ViewInAr
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -19,6 +58,13 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -26,25 +72,129 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.echo.phone.EchoApplication
-import com.echo.phone.domain.*
+import com.echo.phone.data.VoiceQueryRecorder
+import com.echo.phone.domain.EvidenceType
+import com.echo.phone.domain.QueryResult
+import com.echo.phone.domain.QueryResultStatus
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
-class QueryViewModel(private val repo: com.echo.phone.data.EchoRepository) : ViewModel() {
+enum class VoicePhase { IDLE, RECORDING, TRANSCRIBING, SEARCHING }
+
+class QueryViewModel(
+    private val repo: com.echo.phone.data.EchoRepository,
+    private val recorder: VoiceQueryRecorder = VoiceQueryRecorder(),
+) : ViewModel() {
     var question by mutableStateOf("")
-    var scope by mutableStateOf(QueryScope.GLOBAL_WORK)
     var result by mutableStateOf<QueryResult?>(null)
+    var transcript by mutableStateOf<String?>(null)
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
+    var voicePhase by mutableStateOf(VoicePhase.IDLE)
+    var recordingSeconds by mutableStateOf(0)
+    var cancelTargetActive by mutableStateOf(false)
+
+    private var recordingJob: Job? = null
+    private var finishing = false
+    private var startedAtMs = 0L
 
     fun submit() {
-        if (question.isBlank()) return
+        if (question.isBlank() || loading || voicePhase != VoicePhase.IDLE) return
         viewModelScope.launch {
-            loading = true; error = null
-            try { result = repo.query(question, scope, null, null) }
-            catch (e: Exception) { error = e.message }
-            loading = false
+            loading = true
+            error = null
+            transcript = null
+            try {
+                result = repo.query(question.trim(), com.echo.phone.domain.QueryScope.GLOBAL_WORK)
+            } catch (exception: Exception) {
+                error = exception.message ?: "查询失败"
+            } finally {
+                loading = false
+            }
         }
+    }
+
+    fun startVoiceRecording(): Boolean {
+        if (loading || voicePhase != VoicePhase.IDLE || !recorder.start()) {
+            if (voicePhase == VoicePhase.IDLE) error = "无法启动麦克风，请检查录音权限"
+            return false
+        }
+        error = null
+        result = null
+        transcript = null
+        recordingSeconds = 0
+        cancelTargetActive = false
+        finishing = false
+        startedAtMs = android.os.SystemClock.elapsedRealtime()
+        voicePhase = VoicePhase.RECORDING
+        recordingJob?.cancel()
+        recordingJob = viewModelScope.launch {
+            while (voicePhase == VoicePhase.RECORDING) {
+                recordingSeconds = ((android.os.SystemClock.elapsedRealtime() - startedAtMs) / 1000L).toInt()
+                if (recordingSeconds >= VoiceQueryRecorder.MAX_SECONDS) {
+                    finishVoiceRecording(false)
+                    break
+                }
+                delay(100)
+            }
+        }
+        return true
+    }
+
+    fun updateCancelTarget(active: Boolean) {
+        if (voicePhase == VoicePhase.RECORDING) cancelTargetActive = active
+    }
+
+    fun finishVoiceRecording(cancel: Boolean) {
+        if (voicePhase != VoicePhase.RECORDING || finishing) return
+        finishing = true
+        recordingJob?.cancel()
+        recordingJob = null
+        cancelTargetActive = false
+        if (cancel) {
+            recorder.cancel()
+            voicePhase = VoicePhase.IDLE
+            finishing = false
+            return
+        }
+
+        voicePhase = VoicePhase.TRANSCRIBING
+        loading = true
+        viewModelScope.launch {
+            try {
+                val audio = recorder.stop()
+                if (audio.isEmpty()) {
+                    error = "没有采集到语音"
+                    return@launch
+                }
+                val stageJob = launch {
+                    delay(1_200)
+                    if (voicePhase == VoicePhase.TRANSCRIBING) voicePhase = VoicePhase.SEARCHING
+                }
+                val voiceResult = repo.queryVoice(audio)
+                stageJob.cancel()
+                transcript = voiceResult.transcript.ifBlank { null }
+                question = voiceResult.transcript
+                result = voiceResult.result
+                if (!voiceResult.asrAccepted) {
+                    error = voiceResult.rejectionReason ?: "语音识别置信度不足"
+                }
+            } catch (exception: Exception) {
+                error = exception.message ?: "语音查询失败"
+            } finally {
+                voicePhase = VoicePhase.IDLE
+                loading = false
+                finishing = false
+            }
+        }
+    }
+
+    override fun onCleared() {
+        recordingJob?.cancel()
+        recorder.cancel()
+        super.onCleared()
     }
 }
 
@@ -59,15 +209,19 @@ private fun evIcon(t: EvidenceType): ImageVector = when (t) {
 private val GlassBg = Brush.verticalGradient(listOf(Color(0xFFFFFFFF), Color(0xFFF8F9FC)))
 private val GlassBorder = Color(0xFFE2E4EA)
 
-// ── Staggered evidence items ──
 @Composable
 private fun StaggeredItem(index: Int, content: @Composable () -> Unit) {
     var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { delay(index * 50L); visible = true }
-    AnimatedVisibility(visible, enter = fadeIn(tween(400)) + slideInVertically(tween(400)) { it / 3 }) { content() }
+    LaunchedEffect(Unit) {
+        delay(index * 50L)
+        visible = true
+    }
+    AnimatedVisibility(
+        visible,
+        enter = fadeIn(tween(400)) + slideInVertically(tween(400)) { it / 3 },
+    ) { content() }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QueryScreen(onNavigateMemory: (String) -> Unit) {
     val context = LocalContext.current
@@ -76,44 +230,163 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(cls: Class<T>): T = QueryViewModel(app.repository) as T
     })
+    var cancelTargetCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var micCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp).padding(top = 20.dp)) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 20.dp)
+            .padding(top = 20.dp),
+    ) {
         Text("查询", style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(14.dp))
-
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = vm.scope == QueryScope.GLOBAL_WORK, onClick = { vm.scope = QueryScope.GLOBAL_WORK }, label = { Text("全局工作") })
-            FilterChip(selected = vm.scope == QueryScope.MEMORY, onClick = { vm.scope = QueryScope.MEMORY }, label = { Text("当前记忆") })
-            FilterChip(selected = vm.scope == QueryScope.SPACE, onClick = { vm.scope = QueryScope.SPACE }, label = { Text("当前空间") })
-        }
         Spacer(Modifier.height(14.dp))
 
         OutlinedTextField(
             value = vm.question,
             onValueChange = { vm.question = it },
-            modifier = Modifier.fillMaxWidth().shadow(if (vm.question.isNotEmpty()) 2.dp else 0.dp, RoundedCornerShape(10.dp)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .shadow(if (vm.question.isNotEmpty()) 2.dp else 0.dp, RoundedCornerShape(10.dp)),
             placeholder = { Text("例如：张经理承诺了什么？") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
-            trailingIcon = { if (vm.question.isNotBlank()) IconButton(onClick = { vm.submit() }, enabled = !vm.loading) { Icon(Icons.Default.Send, "查询") } },
+            trailingIcon = {
+                if (vm.question.isNotBlank()) {
+                    IconButton(onClick = { vm.submit() }, enabled = !vm.loading) {
+                        Icon(Icons.Default.Send, "查询")
+                    }
+                }
+            },
             singleLine = true,
             shape = MaterialTheme.shapes.small,
             colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary),
         )
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(12.dp))
 
-        AnimatedContent(
-            targetState = when { vm.loading -> "loading"; vm.error != null -> "error"; vm.result != null -> "result"; else -> "idle" },
-            transitionSpec = { fadeIn(tween(250)) + slideInVertically(tween(250)) { it / 4 } togetherWith fadeOut(tween(150)) },
-            label = "result",
-        ) { state ->
-            when (state) {
-                "loading" -> CircularProgressIndicator()
-                "error" -> Box(Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)).padding(18.dp)) {
-                    Text("查询失败: ${vm.error}", color = MaterialTheme.colorScheme.error)
+        AnimatedVisibility(visible = vm.voicePhase == VoicePhase.RECORDING) {
+            Box(Modifier.fillMaxWidth().height(84.dp), contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier
+                        .size(68.dp)
+                        .onGloballyPositioned { cancelTargetCoordinates = it }
+                        .clip(CircleShape)
+                        .background(if (vm.cancelTargetActive) Color(0xFFD92D20) else Color(0xFFFFE4E1))
+                        .border(2.dp, Color(0xFFD92D20), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "取消录音",
+                        tint = if (vm.cancelTargetActive) Color.White else Color(0xFFD92D20),
+                        modifier = Modifier.size(30.dp),
+                    )
                 }
-                "result" -> QueryResultView(vm.result!!)
             }
         }
+
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(64.dp)
+                    .onGloballyPositioned { micCoordinates = it }
+                    .clip(CircleShape)
+                    .background(if (vm.voicePhase == VoicePhase.RECORDING) Color(0xFF1D4ED8) else MaterialTheme.colorScheme.primary)
+                    .pointerInput(vm.voicePhase) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            val held = withTimeoutOrNull(LONG_PRESS_MS) {
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Main)
+                                    val change = event.changes.firstOrNull() ?: continue
+                                    if (!change.pressed) return@withTimeoutOrNull false
+                                }
+                            }
+                            if (held != null || !vm.startVoiceRecording()) return@awaitEachGesture
+
+                            while (vm.voicePhase == VoicePhase.RECORDING) {
+                                val event = awaitPointerEvent(PointerEventPass.Main)
+                                val change = event.changes.firstOrNull() ?: continue
+                                val rootPosition = micCoordinates?.positionInRoot()?.plus(change.position)
+                                val inTarget = rootPosition != null &&
+                                    cancelTargetCoordinates?.boundsInRoot()?.contains(rootPosition) == true
+                                vm.updateCancelTarget(inTarget)
+                                if (change.changedToUpIgnoreConsumed()) {
+                                    vm.finishVoiceRecording(inTarget)
+                                    change.consume()
+                                    break
+                                }
+                                change.consume()
+                            }
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.Mic,
+                    contentDescription = "长按语音查询",
+                    tint = Color.White,
+                    modifier = Modifier.size(30.dp),
+                )
+            }
+            if (vm.voicePhase == VoicePhase.RECORDING) {
+                Spacer(Modifier.width(12.dp))
+                Text("00:${vm.recordingSeconds.toString().padStart(2, '0')}", style = MaterialTheme.typography.titleMedium)
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        AnimatedContent(
+            targetState = when {
+                vm.voicePhase == VoicePhase.TRANSCRIBING -> "transcribing"
+                vm.voicePhase == VoicePhase.SEARCHING -> "searching"
+                vm.loading -> "loading"
+                vm.error != null -> "error"
+                vm.result != null -> "result"
+                else -> "idle"
+            },
+            transitionSpec = { fadeIn(tween(250)) + slideInVertically(tween(250)) { it / 4 } togetherWith fadeOut(tween(150)) },
+            label = "query-result",
+        ) { state ->
+            when (state) {
+                "transcribing" -> StatusView("正在转写", true)
+                "searching" -> StatusView("正在检索", true)
+                "loading" -> StatusView("查询中", true)
+                "error" -> Column {
+                    vm.transcript?.let {
+                        Text("转写：$it", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(10.dp))
+                    }
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFFFFF1F0))
+                            .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(10.dp))
+                            .padding(16.dp),
+                    ) { Text(vm.error ?: "查询失败", color = MaterialTheme.colorScheme.error) }
+                }
+                "result" -> {
+                    vm.transcript?.let {
+                        Text("转写：$it", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(12.dp))
+                    }
+                    QueryResultView(vm.result!!)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusView(label: String, spinning: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (spinning) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+        Spacer(Modifier.width(10.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -124,11 +397,31 @@ private fun QueryResultView(result: QueryResult) {
         QueryResultStatus.POSSIBLE -> Color(0xFFFEF3C7)
         QueryResultStatus.NOT_FOUND -> Color(0xFFF3F4F6)
     }
-    val icon = when (result.status) { QueryResultStatus.CONFIRMED -> Icons.Default.CheckCircle; QueryResultStatus.POSSIBLE -> Icons.Default.Warning; QueryResultStatus.NOT_FOUND -> Icons.Default.Info }
-    val label = when (result.status) { QueryResultStatus.CONFIRMED -> "确定答案"; QueryResultStatus.POSSIBLE -> "可能相关"; QueryResultStatus.NOT_FOUND -> "没有找到" }
-    val iconTint = when (result.status) { QueryResultStatus.CONFIRMED -> Color(0xFF2563EB); QueryResultStatus.POSSIBLE -> Color(0xFFD97706); QueryResultStatus.NOT_FOUND -> Color(0xFF9CA3AF) }
+    val icon = when (result.status) {
+        QueryResultStatus.CONFIRMED -> Icons.Default.CheckCircle
+        QueryResultStatus.POSSIBLE -> Icons.Default.Warning
+        QueryResultStatus.NOT_FOUND -> Icons.Default.Info
+    }
+    val label = when (result.status) {
+        QueryResultStatus.CONFIRMED -> "确定答案"
+        QueryResultStatus.POSSIBLE -> "可能相关"
+        QueryResultStatus.NOT_FOUND -> "没有找到"
+    }
+    val iconTint = when (result.status) {
+        QueryResultStatus.CONFIRMED -> Color(0xFF2563EB)
+        QueryResultStatus.POSSIBLE -> Color(0xFFD97706)
+        QueryResultStatus.NOT_FOUND -> Color(0xFF9CA3AF)
+    }
 
-    Box(Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(bg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)).padding(18.dp)) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .shadow(4.dp, RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(10.dp))
+            .background(bg)
+            .border(1.dp, GlassBorder, RoundedCornerShape(10.dp))
+            .padding(18.dp),
+    ) {
         Column {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(icon, null, tint = iconTint, modifier = Modifier.size(20.dp))
@@ -139,7 +432,10 @@ private fun QueryResultView(result: QueryResult) {
                 Spacer(Modifier.height(10.dp))
                 Text(result.answer ?: "", style = MaterialTheme.typography.bodyLarge)
             }
-            result.uncertaintyReason?.let { Spacer(Modifier.height(4.dp)); Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF6B7280)) }
+            result.uncertaintyReason?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF6B7280))
+            }
         }
     }
 
@@ -148,15 +444,24 @@ private fun QueryResultView(result: QueryResult) {
         Text("证据", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         LazyColumn {
-            itemsIndexed(result.evidences) { i, ev ->
-                StaggeredItem(i) {
-                    Box(Modifier.fillMaxWidth().padding(vertical = 3.dp).shadow(2.dp, RoundedCornerShape(14.dp)).clip(RoundedCornerShape(14.dp)).background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(14.dp)).padding(14.dp)) {
+            itemsIndexed(result.evidences) { index, evidence ->
+                StaggeredItem(index) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp)
+                            .shadow(2.dp, RoundedCornerShape(8.dp))
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(GlassBg)
+                            .border(1.dp, GlassBorder, RoundedCornerShape(8.dp))
+                            .padding(14.dp),
+                    ) {
                         Row(verticalAlignment = Alignment.Top) {
-                            Icon(evIcon(ev.type), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                            Icon(evidence.type.let(::evIcon), null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(10.dp))
                             Column {
-                                Text(ev.content, style = MaterialTheme.typography.bodySmall)
-                                Text("置信: ${ev.confidence.name}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF6B7280))
+                                Text(evidence.content, style = MaterialTheme.typography.bodySmall)
+                                Text("置信: ${evidence.confidence.name}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF6B7280))
                             }
                         }
                     }
@@ -165,3 +470,5 @@ private fun QueryResultView(result: QueryResult) {
         }
     }
 }
+
+private const val LONG_PRESS_MS = 250L

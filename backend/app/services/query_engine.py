@@ -16,6 +16,7 @@ from app.schemas import (
     QueryResponse,
     QuerySourceResponse,
 )
+from app.services.bm25 import BM25Document, BM25Index, normalize_scores
 
 class QueryEngine:
     def __init__(self, repo: MemoryRepository, providers: ProviderFactory | None = None):
@@ -124,46 +125,55 @@ class QueryEngine:
         memory_id: UUID | None,
         space_id: UUID | None,
     ) -> list[Evidence]:
+        settings = self.providers.settings
+        scoped_evidences = await self._scoped_evidences(scope, memory_id, space_id)
+        if not scoped_evidences:
+            return []
+
         embedding = self.providers.embedding()
         vector_store = self.providers.vector_store()
         q_vec = (await embedding.embed_query(question)).vector
-
-        related_memory_ids: set[str] | None = None
-        filt: dict | None
-        if scope == QueryScope.MEMORY and memory_id:
-            filt = {"memory_id": str(memory_id)}
-        elif scope == QueryScope.SPACE and space_id:
-            space = await self.repo.get_space_memory(space_id)
-            if not space:
-                return []
-            related_memory_ids = set()
-            for anchor in space.anchors:
-                related_memory_ids.update(str(m) for m in anchor.related_memory_ids)
-            # 叠加候选/确认的时空绑定所关联的时间记忆
-            for b in await self.repo.list_bindings(space_memory_id=space_id):
-                if b.time_memory_id:
-                    related_memory_ids.add(str(b.time_memory_id))
-            filt = None
-        else:
-            # GLOBAL_WORK：严格排除 quality_time 分区
-            filt = {"partition": "work"}
-
-        settings = self.providers.settings
+        filt = {"partition": "work"} if scope == QueryScope.GLOBAL_WORK else None
         scored = await vector_store.search(
             q_vec,
-            top_k=max(settings.reranker_candidates, settings.reranker_top_k),
+            top_k=settings.reranker_candidates,
             filter=filt,
         )
+        scoped_by_id = {str(evidence.id): evidence for evidence in scoped_evidences}
+        vector_scores = {
+            ev_id: score
+            for ev_id, score, _meta in scored
+            if ev_id in scoped_by_id
+        }
 
-        candidates: list[tuple[Evidence, float]] = []
-        for ev_id, _score, meta in scored:
-            if related_memory_ids is not None:
-                if meta.get("memory_id") not in related_memory_ids:
-                    continue
-            ev = await self.repo.get_evidence(UUID(ev_id))
-            if ev:
-                candidates.append((ev, _score))
+        if settings.hybrid_retrieval_enabled:
+            bm25 = BM25Index(
+                [BM25Document(str(ev.id), ev.content) for ev in scoped_evidences],
+                k1=settings.bm25_k1,
+                b=settings.bm25_b,
+            )
+            bm25_scores = dict(bm25.search(question, settings.reranker_candidates))
+            vector_norm = normalize_scores(vector_scores)
+            bm25_norm = normalize_scores(bm25_scores)
+            fused_scores = {
+                ev_id: settings.hybrid_vector_weight * vector_norm.get(ev_id, 0.0)
+                + settings.hybrid_bm25_weight * bm25_norm.get(ev_id, 0.0)
+                for ev_id in set(vector_norm) | set(bm25_norm)
+            }
+            candidate_ids = [
+                ev_id
+                for ev_id, _score in sorted(
+                    fused_scores.items(), key=lambda item: item[1], reverse=True
+                )[: settings.reranker_candidates]
+            ]
+        else:
+            candidate_ids = list(vector_scores)
 
+        candidates = [
+            (scoped_by_id[ev_id], vector_scores.get(ev_id, 0.0))
+            for ev_id in candidate_ids
+            if ev_id in scoped_by_id
+        ]
         if not candidates:
             return []
         if not settings.reranker_enabled:
@@ -181,6 +191,30 @@ class QueryEngine:
         ]
         ranked.sort(key=lambda item: item[1], reverse=True)
         return [ev for ev, _score in ranked[: settings.reranker_top_k]]
+
+    async def _scoped_evidences(
+        self,
+        scope: QueryScope,
+        memory_id: UUID | None,
+        space_id: UUID | None,
+    ) -> list[Evidence]:
+        if scope == QueryScope.MEMORY and memory_id:
+            return await self.repo.list_evidences(memory_id)
+        if scope == QueryScope.SPACE and space_id:
+            space = await self.repo.get_space_memory(space_id)
+            if not space:
+                return []
+            related_memory_ids: set[str] = set()
+            for anchor in space.anchors:
+                related_memory_ids.update(str(item) for item in anchor.related_memory_ids)
+            for binding in await self.repo.list_bindings(space_memory_id=space_id):
+                if binding.time_memory_id:
+                    related_memory_ids.add(str(binding.time_memory_id))
+            evidences = []
+            for related_id in related_memory_ids:
+                evidences.extend(await self.repo.list_evidences(UUID(related_id)))
+            return evidences
+        return await self.repo.list_all_work_evidences()
 
     async def _sources(self, evidences: list[Evidence]) -> list[QuerySourceResponse]:
         sources: list[QuerySourceResponse] = []

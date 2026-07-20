@@ -1,7 +1,4 @@
-"""持久化向量检索：向量存 SQLite，加载入 numpy 做余弦相似度 + metadata 过滤。
-
-MVP 规模下（单机、万级向量）足够；避免引入 FAISS 等重依赖。
-"""
+"""SQLite vector retrieval with isolated embedding namespaces."""
 
 from __future__ import annotations
 
@@ -22,12 +19,23 @@ class SqliteVectorStore(VectorStore):
         db_path: str = "./data/vectors.db",
         embedding_model: str | None = None,
         embedding_dimension: int | None = None,
+        namespace: str = "text",
     ):
+        if not namespace or any(
+            char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in namespace
+        ):
+            raise ValueError("invalid vector namespace")
         self.db_path = db_path
         self.embedding_model = embedding_model
         self.embedding_dimension = embedding_dimension
+        self.namespace = namespace
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._initialized = False
+
+    @staticmethod
+    async def _table_columns(db: aiosqlite.Connection, table: str) -> set[str]:
+        async with db.execute(f"PRAGMA table_info({table})") as cursor:
+            return {str(row[1]) for row in await cursor.fetchall()}
 
     async def _ensure_init(self) -> None:
         if self._initialized:
@@ -42,6 +50,42 @@ class SqliteVectorStore(VectorStore):
                 )
                 """
             )
+            if "namespace" not in await self._table_columns(db, "vectors"):
+                await db.execute("ALTER TABLE vectors RENAME TO vectors_legacy")
+                await db.execute(
+                    """
+                    CREATE TABLE vectors (
+                        namespace TEXT NOT NULL,
+                        id TEXT NOT NULL,
+                        vector TEXT NOT NULL,
+                        metadata TEXT NOT NULL,
+                        PRIMARY KEY (namespace, id)
+                    )
+                    """
+                )
+                await db.execute(
+                    """
+                    INSERT INTO vectors (namespace, id, vector, metadata)
+                    SELECT 'text', id, vector, metadata FROM vectors_legacy
+                    """
+                )
+                await db.execute("DROP TABLE vectors_legacy")
+
+            async with db.execute(
+                "SELECT namespace, id, metadata FROM vectors"
+            ) as cursor:
+                legacy_rows = await cursor.fetchall()
+            for row_namespace, entry_id, meta_json in legacy_rows:
+                metadata = json.loads(meta_json)
+                if metadata.get("embedding_namespace") == row_namespace:
+                    continue
+                metadata["embedding_namespace"] = row_namespace
+                await db.execute(
+                    "UPDATE vectors SET metadata = ? "
+                    "WHERE namespace = ? AND id = ?",
+                    (json.dumps(metadata), row_namespace, entry_id),
+                )
+
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS vector_index_metadata (
@@ -51,6 +95,31 @@ class SqliteVectorStore(VectorStore):
                 )
                 """
             )
+            if "namespace" not in await self._table_columns(
+                db, "vector_index_metadata"
+            ):
+                await db.execute(
+                    "ALTER TABLE vector_index_metadata "
+                    "RENAME TO vector_index_metadata_legacy"
+                )
+                await db.execute(
+                    """
+                    CREATE TABLE vector_index_metadata (
+                        namespace TEXT PRIMARY KEY,
+                        embedding_model TEXT NOT NULL,
+                        dimension INTEGER NOT NULL
+                    )
+                    """
+                )
+                await db.execute(
+                    """
+                    INSERT INTO vector_index_metadata
+                        (namespace, embedding_model, dimension)
+                    SELECT 'text', embedding_model, dimension
+                    FROM vector_index_metadata_legacy
+                    """
+                )
+                await db.execute("DROP TABLE vector_index_metadata_legacy")
             await db.commit()
         self._initialized = True
 
@@ -72,13 +141,17 @@ class SqliteVectorStore(VectorStore):
         self, db: aiosqlite.Connection
     ) -> tuple[str, int] | None:
         async with db.execute(
-            "SELECT embedding_model, dimension FROM vector_index_metadata WHERE id = 1"
+            "SELECT embedding_model, dimension FROM vector_index_metadata "
+            "WHERE namespace = ?",
+            (self.namespace,),
         ) as cursor:
             row = await cursor.fetchone()
         return (str(row[0]), int(row[1])) if row else None
 
     async def _count(self, db: aiosqlite.Connection) -> int:
-        async with db.execute("SELECT COUNT(*) FROM vectors") as cursor:
+        async with db.execute(
+            "SELECT COUNT(*) FROM vectors WHERE namespace = ?", (self.namespace,)
+        ) as cursor:
             row = await cursor.fetchone()
         return int(row[0])
 
@@ -100,10 +173,12 @@ class SqliteVectorStore(VectorStore):
                 f"query dimension mismatch: index={dimension}, query={vector_dimension}"
             )
 
-    @staticmethod
-    def _metadata_with_index(metadata: dict, model: str, dimension: int) -> dict:
+    def _metadata_with_index(
+        self, metadata: dict, model: str, dimension: int
+    ) -> dict:
         return {
             **metadata,
+            "embedding_namespace": self.namespace,
             "embedding_model": model,
             "embedding_dimension": dimension,
         }
@@ -127,14 +202,16 @@ class SqliteVectorStore(VectorStore):
                     )
                     await db.execute(
                         "INSERT INTO vector_index_metadata "
-                        "(id, embedding_model, dimension) VALUES (1, ?, ?)",
-                        index_metadata,
+                        "(namespace, embedding_model, dimension) VALUES (?, ?, ?)",
+                        (self.namespace, *index_metadata),
                     )
                 self._assert_index_compatible(index_metadata, vector_dimension)
                 model, dimension = index_metadata
                 await db.execute(
-                    "INSERT OR REPLACE INTO vectors (id, vector, metadata) VALUES (?, ?, ?)",
+                    "INSERT OR REPLACE INTO vectors "
+                    "(namespace, id, vector, metadata) VALUES (?, ?, ?, ?)",
                     (
+                        self.namespace,
                         id,
                         json.dumps(vector),
                         json.dumps(
@@ -166,12 +243,16 @@ class SqliteVectorStore(VectorStore):
                 return []
             self._assert_index_compatible(index_metadata, vector_dimension)
             model, dimension = index_metadata
-            async with db.execute("SELECT id, vector, metadata FROM vectors") as cursor:
+            async with db.execute(
+                "SELECT id, vector, metadata FROM vectors WHERE namespace = ?",
+                (self.namespace,),
+            ) as cursor:
                 async for row in cursor:
                     vid, vec_json, meta_json = row
                     meta = json.loads(meta_json)
                     if (
-                        meta.get("embedding_model") != model
+                        meta.get("embedding_namespace") != self.namespace
+                        or meta.get("embedding_model") != model
                         or meta.get("embedding_dimension") != dimension
                     ):
                         raise VectorIndexMismatch(
@@ -182,15 +263,20 @@ class SqliteVectorStore(VectorStore):
                     values = json.loads(vec_json)
                     self._validate_vector(values, dimension)
                     v = np.array(values, dtype=np.float32)
-                    score = float(np.dot(q, v) / (q_norm * (np.linalg.norm(v) + 1e-8)))
+                    score = float(
+                        np.dot(q, v) / (q_norm * (np.linalg.norm(v) + 1e-8))
+                    )
                     results.append((vid, score, meta))
-        results.sort(key=lambda x: x[1], reverse=True)
+        results.sort(key=lambda item: item[1], reverse=True)
         return results[:top_k]
 
     async def delete(self, id: str) -> None:
         await self._ensure_init()
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("DELETE FROM vectors WHERE id = ?", (id,))
+            await db.execute(
+                "DELETE FROM vectors WHERE namespace = ? AND id = ?",
+                (self.namespace, id),
+            )
             await db.commit()
 
     async def replace_all(
@@ -223,6 +309,7 @@ class SqliteVectorStore(VectorStore):
                     )
                 rows = [
                     (
+                        self.namespace,
                         entry_id,
                         json.dumps(vector),
                         json.dumps(
@@ -231,18 +318,24 @@ class SqliteVectorStore(VectorStore):
                     )
                     for entry_id, vector, metadata in entries
                 ]
-                await db.execute("DELETE FROM vectors")
+                await db.execute(
+                    "DELETE FROM vectors WHERE namespace = ?", (self.namespace,)
+                )
                 if rows:
                     await db.executemany(
-                        "INSERT INTO vectors (id, vector, metadata) VALUES (?, ?, ?)",
+                        "INSERT INTO vectors "
+                        "(namespace, id, vector, metadata) VALUES (?, ?, ?, ?)",
                         rows,
                     )
                 await db.execute(
                     "INSERT OR REPLACE INTO vector_index_metadata "
-                    "(id, embedding_model, dimension) VALUES (1, ?, ?)",
-                    (model, dimension),
+                    "(namespace, embedding_model, dimension) VALUES (?, ?, ?)",
+                    (self.namespace, model, dimension),
                 )
-                async with db.execute("SELECT id FROM vectors") as cursor:
+                async with db.execute(
+                    "SELECT id FROM vectors WHERE namespace = ?",
+                    (self.namespace,),
+                ) as cursor:
                     persisted_ids = {str(row[0]) for row in await cursor.fetchall()}
                 if persisted_ids != set(ids):
                     raise RuntimeError("vector replacement verification failed")
@@ -268,16 +361,21 @@ class SqliteVectorStore(VectorStore):
         )
 
     async def delete_by_filter(self, filter: dict) -> None:
-        """按 metadata 过滤级联删除（记忆/空间删除时清理向量）。"""
         await self._ensure_init()
         to_delete: list[str] = []
         async with aiosqlite.connect(self.db_path) as db:
-            async with db.execute("SELECT id, metadata FROM vectors") as cursor:
+            async with db.execute(
+                "SELECT id, metadata FROM vectors WHERE namespace = ?",
+                (self.namespace,),
+            ) as cursor:
                 async for row in cursor:
                     vid, meta_json = row
                     meta = json.loads(meta_json)
-                    if all(meta.get(k) == v for k, v in filter.items()):
+                    if all(meta.get(key) == value for key, value in filter.items()):
                         to_delete.append(vid)
             for vid in to_delete:
-                await db.execute("DELETE FROM vectors WHERE id = ?", (vid,))
+                await db.execute(
+                    "DELETE FROM vectors WHERE namespace = ? AND id = ?",
+                    (self.namespace, vid),
+                )
             await db.commit()

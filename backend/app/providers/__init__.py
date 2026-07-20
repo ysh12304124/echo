@@ -18,6 +18,7 @@ from app.providers.mock.providers import (
     MockEmbeddingProvider,
     MockLLMProvider,
     MockRerankerProvider,
+    MockVisualEmbeddingProvider,
 )
 
 
@@ -42,6 +43,17 @@ class Settings(BaseSettings):
         "Given a question about the user's work memories, retrieve evidence passages "
         "that directly answer the question"
     )
+
+    visual_embedding_base_url: str = "http://192.168.0.100:8300"
+    visual_embedding_model: str = "chinese-clip-vit-base-patch16"
+    visual_embedding_dimension: int = 512
+    visual_embedding_api_key: str = "echo-internal-dev-token"
+    visual_embedding_timeout_seconds: float = 30.0
+    visual_retrieval_enabled: bool = True
+    visual_retrieval_candidates: int = 10
+    visual_retrieval_top_k: int = 3
+    visual_retrieval_min_score: float = 0.20
+    visual_max_image_bytes: int = 10 * 1024 * 1024
 
     # 算力服务（compute/，独立进程，同机 localhost 通信）。
     # compute_provider_mode 独立于 provider_mode：默认 mock，即使 provider_mode=local 也不会
@@ -79,6 +91,7 @@ class ProviderFactory:
     def __init__(self, settings: Optional[Settings] = None):
         self.settings = settings or get_settings()
         self._vector_store: Optional[VectorStore] = None
+        self._visual_vector_store: Optional[VectorStore] = None
         self._is_local = self.settings.provider_mode.lower() == "local"
 
     def _client(self, base_url: str, api_key: str):
@@ -122,6 +135,36 @@ class ProviderFactory:
             else:
                 self._vector_store = InMemoryVectorStore()
         return self._vector_store
+
+    def visual_embedding(self):
+        if not self._is_local:
+            return MockVisualEmbeddingProvider()
+        from app.providers.local.visual import HttpVisualEmbeddingProvider
+
+        s = self.settings
+        return HttpVisualEmbeddingProvider(
+            base_url=s.visual_embedding_base_url,
+            model=s.visual_embedding_model,
+            api_key=s.visual_embedding_api_key,
+            dimension=s.visual_embedding_dimension,
+            timeout=s.visual_embedding_timeout_seconds,
+        )
+
+    def visual_vector_store(self) -> VectorStore:
+        if self._visual_vector_store is None:
+            if self._is_local:
+                from app.providers.sqlite_vector import SqliteVectorStore
+
+                s = self.settings
+                self._visual_vector_store = SqliteVectorStore(
+                    s.vector_db_path,
+                    s.visual_embedding_model,
+                    s.visual_embedding_dimension,
+                    namespace="visual",
+                )
+            else:
+                self._visual_vector_store = InMemoryVectorStore()
+        return self._visual_vector_store
 
     def reranker(self) -> RerankerProvider:
         if not self._is_local:

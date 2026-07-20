@@ -158,3 +158,30 @@ async def test_legacy_index_without_metadata_requires_rebuild():
         )
         with pytest.raises(VectorIndexMismatch, match="metadata is missing"):
             await store.search([1.0, 0.0])
+
+
+@pytest.mark.asyncio
+async def test_namespaces_keep_text_and_visual_indexes_isolated():
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = str(Path(tmp) / "vec.db")
+        text_store = SqliteVectorStore(db_path, "qwen", 2, namespace="text")
+        visual_store = SqliteVectorStore(db_path, "chinese-clip", 3, namespace="visual")
+        await text_store.replace_all(
+            [("text-1", [1.0, 0.0], {"partition": "work"})]
+        )
+        await visual_store.replace_all(
+            [("image-1", [0.0, 1.0, 0.0], {"partition": "work"})]
+        )
+
+        await visual_store.replace_all(
+            [("image-2", [0.0, 0.0, 1.0], {"partition": "work"})]
+        )
+
+        assert [row[0] for row in await text_store.search([1.0, 0.0])] == [
+            "text-1"
+        ]
+        assert [row[0] for row in await visual_store.search([0.0, 0.0, 1.0])] == [
+            "image-2"
+        ]
+        assert (await text_store.index_info()).count == 1
+        assert (await visual_store.index_info()).count == 1

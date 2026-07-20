@@ -29,11 +29,21 @@ class VectorIndexMismatch(RuntimeError):
     """The persisted vector index does not match the configured embedding model."""
 
 
+class VisualEmbeddingUnavailable(RuntimeError):
+    """The configured Chinese-CLIP service cannot serve an embedding request."""
+
+
 @dataclass(frozen=True)
 class VectorIndexInfo:
     model: str
     dimension: int
     count: int
+
+
+@dataclass(frozen=True)
+class ImageInput:
+    path: str
+    caption: str = ""
 
 
 class LLMProvider(ABC):
@@ -63,6 +73,15 @@ class LLMProvider(ABC):
         answer = await self.answer_query(question, evidence_context)
         return {"answer": answer, "confidence": "high" if answer else "low"}
 
+    async def answer_query_multimodal(
+        self,
+        question: str,
+        evidence_context: str,
+        images: list[ImageInput],
+    ) -> dict:
+        """Answer from text and images; text-only providers retain the old behavior."""
+        return await self.answer_query_structured(question, evidence_context)
+
     async def build_navigation_summary(self, scene: str, transcript: str) -> dict:
         """生成导航型摘要，返回 {"persons","topics","key_moments","suggested_questions"}。默认空。"""
         return {}
@@ -80,6 +99,16 @@ class EmbeddingProvider(ABC):
     async def embed_document(self, text: str) -> EmbeddingResult:
         """Embed an indexed document. Providers may apply model-specific task prefixes."""
         return await self.embed(text)
+
+
+class VisualEmbeddingProvider(ABC):
+    @abstractmethod
+    async def embed_text(self, text: str) -> EmbeddingResult:
+        pass
+
+    @abstractmethod
+    async def embed_images(self, images: list[bytes]) -> list[EmbeddingResult]:
+        pass
 
 
 class RerankerProvider(ABC):

@@ -28,6 +28,7 @@ from app.logging_setup import get_logger
 from app.providers import ProviderFactory, get_provider_factory, get_settings
 from app.repositories.database import async_session_factory
 from app.repositories.memory_repo import MemoryRepository
+from app.services.keyframe_index import index_memory_keyframes
 
 log = get_logger("compute_client")
 
@@ -288,7 +289,11 @@ async def apply_audio_result(
 
 
 async def apply_time_result(
-    repo: MemoryRepository, memory_id: UUID, status: str, result: dict[str, Any]
+    repo: MemoryRepository,
+    memory_id: UUID,
+    status: str,
+    result: dict[str, Any],
+    providers: ProviderFactory | None = None,
 ) -> None:
     memory = await repo.get_time_memory(memory_id)
     if not memory:
@@ -318,6 +323,15 @@ async def apply_time_result(
         key_frames=key_frames,
         evidence_status="ready" if (identify_brief or key_frames) else None,
     )
+    if key_frames is not None and get_settings().visual_retrieval_enabled:
+        updated_memory = await repo.get_time_memory(memory_id)
+        if updated_memory:
+            try:
+                await index_memory_keyframes(
+                    updated_memory, providers or get_provider_factory()
+                )
+            except Exception as exc:
+                log.error("关键帧向量化失败 memory=%s: %s", memory_id, exc)
     if memory.session_id:
         await repo.link_session_memory(memory.session_id, memory_id, MemoryStatus.COMPLETED)
 

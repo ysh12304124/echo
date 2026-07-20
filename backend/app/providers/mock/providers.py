@@ -14,6 +14,7 @@ from app.providers.base import (
     RerankerProvider,
     VectorIndexInfo,
     VectorStore,
+    VisualEmbeddingProvider,
 )
 
 
@@ -103,6 +104,31 @@ class MockRerankerProvider(RerankerProvider):
     self, query: str, candidates: list[RerankCandidate]
   ) -> list[RerankResult]:
     return [RerankResult(id=candidate.id, score=1.0) for candidate in candidates]
+
+
+class MockVisualEmbeddingProvider(VisualEmbeddingProvider):
+  DIM = 512
+
+  async def embed_text(self, text: str) -> EmbeddingResult:
+    vec = np.zeros(self.DIM, dtype=np.float32)
+    for index, token in enumerate(text):
+      vec[(hash(token) + index) % self.DIM] += 1.0
+    norm = np.linalg.norm(vec)
+    if norm:
+      vec /= norm
+    return EmbeddingResult(vector=vec.tolist(), text=text)
+
+  async def embed_images(self, images: list[bytes]) -> list[EmbeddingResult]:
+    results = []
+    for image in images:
+      vector = np.zeros(self.DIM, dtype=np.float32)
+      for index, value in enumerate(image[:4096]):
+        vector[(value + index) % self.DIM] += 1.0
+      norm = np.linalg.norm(vector)
+      if norm:
+        vector /= norm
+      results.append(EmbeddingResult(vector=vector.tolist(), text=""))
+    return results
 
 
 class InMemoryVectorStore(VectorStore):

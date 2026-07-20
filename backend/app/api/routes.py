@@ -19,7 +19,11 @@ from app.domain.enums import (
 )
 from app.domain.models import ImuSample, NavigationSummary, SpaceMemory, TimeMemory
 from app.providers import get_provider_factory, get_settings
-from app.providers.base import RerankerUnavailable, VectorIndexMismatch
+from app.providers.base import (
+    RerankerUnavailable,
+    VectorIndexMismatch,
+    VisualEmbeddingUnavailable,
+)
 from app.repositories.database import get_db
 from app.repositories.memory_repo import MemoryRepository
 from app.schemas import (
@@ -410,12 +414,14 @@ async def delete_memory(memory_id: UUID, repo: MemoryRepository = Depends(get_re
     factory = get_provider_factory()
     blob = factory.blob_store()
     vector = factory.vector_store()
+    visual_vector = factory.visual_vector_store()
     for ev in await repo.list_evidences(memory_id):
         if ev.media_path:
             key = ev.media_path.split("/blobs/", 1)[-1]
             await blob.delete(key)
     try:
         await vector.delete_by_filter({"memory_id": str(memory_id)})
+        await visual_vector.delete_by_filter({"memory_id": str(memory_id)})
     except NotImplementedError:
         pass
     await repo.delete_time_memory(memory_id)
@@ -617,6 +623,9 @@ async def query(req: QueryRequest, repo: MemoryRepository = Depends(get_repo)):
     except VectorIndexMismatch as exc:
         log.error("向量索引与 Embedding 配置不一致: %s", exc)
         raise HTTPException(503, "Embedding index requires rebuild") from exc
+    except VisualEmbeddingUnavailable as exc:
+        log.error("Chinese-CLIP 不可用: %s", exc)
+        raise HTTPException(503, "Visual embedding service unavailable") from exc
     log.info(
         "查询返回 query=%s status=%s evidences=%d answer=%r",
         result.query_id,
@@ -679,6 +688,9 @@ async def voice_query(
         except VectorIndexMismatch as exc:
             log.error("语音查询向量索引与 Embedding 配置不一致: %s", exc)
             raise HTTPException(503, "Embedding index requires rebuild") from exc
+        except VisualEmbeddingUnavailable as exc:
+            log.error("语音查询 Chinese-CLIP 不可用: %s", exc)
+            raise HTTPException(503, "Visual embedding service unavailable") from exc
         return VoiceQueryResponse(
             transcript=transcript,
             asr_avg_logprob=avg_logprob,

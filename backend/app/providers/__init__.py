@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     reranker_min_score: float = 0.5
     reranker_timeout_seconds: float = 10.0
     voice_query_max_seconds: int = 60
+    voice_query_min_seconds: float = 0.5
     asr_min_avg_logprob: float = -1.0
     hybrid_retrieval_enabled: bool = True
     hybrid_vector_weight: float = 0.65

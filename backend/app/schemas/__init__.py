@@ -208,8 +208,17 @@ class QueryResponse(BaseModel):
     uncertainty_reason: Optional[str] = None
 
 
+class VoiceTranscriptionResponse(BaseModel):
+    transcript: str = ""
+    duration_ms: int = 0
+    asr_avg_logprob: Optional[float] = None
+    asr_accepted: bool
+    rejection_reason: Optional[str] = None
+
+
 class VoiceQueryResponse(BaseModel):
     transcript: str = ""
+    duration_ms: int = 0
     asr_avg_logprob: Optional[float] = None
     asr_accepted: bool
     rejection_reason: Optional[str] = None

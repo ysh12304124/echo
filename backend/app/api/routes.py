@@ -55,6 +55,7 @@ from app.schemas import (
     UpdatePersonRequest,
     UpdateSpaceRequest,
     UploadAckResponse,
+    VoiceTranscriptionResponse,
     VoiceQueryResponse,
 )
 from app.logging_setup import get_logger
@@ -636,11 +637,7 @@ async def query(req: QueryRequest, repo: MemoryRepository = Depends(get_repo)):
     return result
 
 
-@router.post("/query/voice", response_model=VoiceQueryResponse)
-async def voice_query(
-    file: UploadFile = File(...),
-    repo: MemoryRepository = Depends(get_repo),
-):
+async def _transcribe_voice_upload(file: UploadFile) -> VoiceTranscriptionResponse:
     settings = get_settings()
     data = await file.read()
     max_bytes = settings.voice_query_max_seconds * 16000 * 1 * 2
@@ -650,6 +647,13 @@ async def voice_query(
         raise HTTPException(400, "Audio must be 16-bit PCM")
     if len(data) > max_bytes:
         raise HTTPException(400, "Audio duration exceeds 60 seconds")
+    duration_ms = round(len(data) / (16000 * 1 * 2) * 1000)
+    if duration_ms < round(settings.voice_query_min_seconds * 1000):
+        return VoiceTranscriptionResponse(
+            duration_ms=duration_ms,
+            asr_accepted=False,
+            rejection_reason="语音太短，请长按并说完整问题",
+        )
 
     blob = get_provider_factory().blob_store()
     key = f"query-audio/{uuid4()}.pcm"
@@ -670,35 +674,69 @@ async def voice_query(
             avg_logprob is None or avg_logprob >= settings.asr_min_avg_logprob
         )
         if not accepted:
-            reason = "ASR 未识别到有效文本" if not transcript else "ASR 置信度过低"
-            return VoiceQueryResponse(
+            reason = (
+                "没听清，请再说一次"
+                if not transcript
+                else "语音识别置信度不足，请说清楚后重试"
+            )
+            return VoiceTranscriptionResponse(
                 transcript=transcript,
+                duration_ms=duration_ms,
                 asr_avg_logprob=avg_logprob,
                 asr_accepted=False,
                 rejection_reason=reason,
             )
 
-        try:
-            result = await QueryEngine(repo).query(
-                transcript, QueryScope.GLOBAL_WORK
-            )
-        except RerankerUnavailable as exc:
-            log.error("语音查询 reranker 不可用: %s", exc)
-            raise HTTPException(503, "Reranker service unavailable") from exc
-        except VectorIndexMismatch as exc:
-            log.error("语音查询向量索引与 Embedding 配置不一致: %s", exc)
-            raise HTTPException(503, "Embedding index requires rebuild") from exc
-        except VisualEmbeddingUnavailable as exc:
-            log.error("语音查询 Chinese-CLIP 不可用: %s", exc)
-            raise HTTPException(503, "Visual embedding service unavailable") from exc
-        return VoiceQueryResponse(
+        return VoiceTranscriptionResponse(
             transcript=transcript,
+            duration_ms=duration_ms,
             asr_avg_logprob=avg_logprob,
             asr_accepted=True,
-            result=result,
         )
     finally:
         await blob.delete(key)
+
+
+@router.post("/query/voice/transcribe", response_model=VoiceTranscriptionResponse)
+async def transcribe_voice(file: UploadFile = File(...)):
+    return await _transcribe_voice_upload(file)
+
+
+@router.post("/query/voice", response_model=VoiceQueryResponse)
+async def voice_query(
+    file: UploadFile = File(...),
+    repo: MemoryRepository = Depends(get_repo),
+):
+    transcription = await _transcribe_voice_upload(file)
+    if not transcription.asr_accepted:
+        return VoiceQueryResponse(
+            transcript=transcription.transcript,
+            duration_ms=transcription.duration_ms,
+            asr_avg_logprob=transcription.asr_avg_logprob,
+            asr_accepted=False,
+            rejection_reason=transcription.rejection_reason,
+        )
+
+    try:
+        result = await QueryEngine(repo).query(
+            transcription.transcript, QueryScope.GLOBAL_WORK
+        )
+    except RerankerUnavailable as exc:
+        log.error("语音查询 reranker 不可用: %s", exc)
+        raise HTTPException(503, "Reranker service unavailable") from exc
+    except VectorIndexMismatch as exc:
+        log.error("语音查询向量索引与 Embedding 配置不一致: %s", exc)
+        raise HTTPException(503, "Embedding index requires rebuild") from exc
+    except VisualEmbeddingUnavailable as exc:
+        log.error("语音查询 Chinese-CLIP 不可用: %s", exc)
+        raise HTTPException(503, "Visual embedding service unavailable") from exc
+    return VoiceQueryResponse(
+        transcript=transcription.transcript,
+        duration_ms=transcription.duration_ms,
+        asr_avg_logprob=transcription.asr_avg_logprob,
+        asr_accepted=True,
+        result=result,
+    )
 
 
 # --- Persons ---

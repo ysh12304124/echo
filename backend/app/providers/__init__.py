@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # 在测试/离线环境里真的发网络请求；只有显式设为 http 才会真的提交给 compute_base_url。
     compute_provider_mode: str = "mock"  # mock | http
     compute_base_url: str = "http://127.0.0.1:8100"
+    request_timeout_seconds: float = 120.0
     # 算力服务回调后台时使用的地址；后台自己生成 callback_url 时用这个拼接。
     public_callback_base_url: str = "http://127.0.0.1:8000"
     # 后台 /internal/* 回调路由与算力服务提交请求之间约定的共享密钥，仅做简单头校验。

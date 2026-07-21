@@ -1,11 +1,8 @@
 package com.echo.phone.ui.query
 
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -101,8 +98,10 @@ class QueryViewModel(
     var voicePhase by mutableStateOf(VoicePhase.IDLE)
     var recordingSeconds by mutableStateOf(0)
     var cancelTargetActive by mutableStateOf(false)
+    var voiceFeedback by mutableStateOf<String?>(null)
 
     private var recordingJob: Job? = null
+    private var feedbackJob: Job? = null
     private var finishing = false
     private var startedAtMs = 0L
 
@@ -133,6 +132,7 @@ class QueryViewModel(
         transcript = null
         recordingSeconds = 0
         cancelTargetActive = false
+        voiceFeedback = null
         finishing = false
         startedAtMs = android.os.SystemClock.elapsedRealtime()
         voicePhase = VoicePhase.RECORDING
@@ -164,6 +164,7 @@ class QueryViewModel(
             recorder.cancel()
             voicePhase = VoicePhase.IDLE
             finishing = false
+            showVoiceFeedback("已取消录音")
             return
         }
 
@@ -203,6 +204,15 @@ class QueryViewModel(
         }
     }
 
+    private fun showVoiceFeedback(message: String) {
+        feedbackJob?.cancel()
+        voiceFeedback = message
+        feedbackJob = viewModelScope.launch {
+            delay(1400)
+            if (voiceFeedback == message) voiceFeedback = null
+        }
+    }
+
     private fun userFacingQueryError(exception: Exception): String {
         if (exception is IOException) return "网络连接失败，请检查网络后重试"
         return when ((exception as? HttpException)?.code()) {
@@ -219,6 +229,7 @@ class QueryViewModel(
 
     override fun onCleared() {
         recordingJob?.cancel()
+        feedbackJob?.cancel()
         recorder.cancel()
         super.onCleared()
     }
@@ -301,35 +312,24 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                     Spacer(Modifier.height(12.dp))
                 }
             }
-            AnimatedContent(
-                targetState = when {
-                    vm.voicePhase == VoicePhase.TRANSCRIBING -> "transcribing"
-                    vm.voicePhase == VoicePhase.SEARCHING -> "searching"
-                    vm.loading -> "loading"
-                    vm.error != null -> "error"
-                    vm.result != null -> "result"
-                    else -> "idle"
-                },
-                transitionSpec = { fadeIn(tween(250)) + slideInVertically(tween(250)) { it / 4 } togetherWith fadeOut(tween(150)) },
-                label = "query-result",
-            ) { state ->
-                when (state) {
-                    "transcribing" -> StatusView("正在转写", true)
-                    "searching" -> StatusView("正在检索", true)
-                    "loading" -> StatusView("查询中", true)
-                    "error" -> Column {
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFFFFF1F0))
-                                .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(10.dp))
-                                .padding(16.dp),
-                        ) { Text(vm.error ?: "查询失败", color = MaterialTheme.colorScheme.error) }
-                    }
-                    "result" -> {
-                        QueryResultView(vm.result!!, app.repository::absoluteMediaUrl)
-                    }
+            val currentError = vm.error
+            val currentResult = vm.result
+            when {
+                vm.voicePhase == VoicePhase.TRANSCRIBING -> StatusView("正在转写", true)
+                vm.voicePhase == VoicePhase.SEARCHING -> StatusView("正在检索", true)
+                vm.loading -> StatusView("查询中", true)
+                currentError != null -> {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFFFFF1F0))
+                            .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(10.dp))
+                            .padding(16.dp),
+                    ) { Text(currentError, color = MaterialTheme.colorScheme.error) }
+                }
+                currentResult != null -> {
+                    QueryResultView(currentResult, app.repository::absoluteMediaUrl)
                 }
             }
         }
@@ -337,22 +337,29 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
         Spacer(Modifier.height(10.dp))
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             AnimatedVisibility(visible = vm.voicePhase == VoicePhase.RECORDING) {
-                Box(Modifier.fillMaxWidth().height(84.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxWidth().height(104.dp), contentAlignment = Alignment.Center) {
                     Box(
                         Modifier
-                            .size(68.dp)
+                            .size(88.dp)
                             .onGloballyPositioned { cancelTargetCoordinates = it }
                             .clip(CircleShape)
                             .background(if (vm.cancelTargetActive) Color(0xFFD92D20) else Color(0xFFFFE4E1))
                             .border(2.dp, Color(0xFFD92D20), CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "取消录音",
-                            tint = if (vm.cancelTargetActive) Color.White else Color(0xFFD92D20),
-                            modifier = Modifier.size(30.dp),
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "取消录音",
+                                tint = if (vm.cancelTargetActive) Color.White else Color(0xFFD92D20),
+                                modifier = Modifier.size(30.dp),
+                            )
+                            Text(
+                                if (vm.cancelTargetActive) "松开取消" else "移入取消",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (vm.cancelTargetActive) Color.White else Color(0xFFD92D20),
+                            )
+                        }
                     }
                 }
             }
@@ -368,7 +375,7 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                         .onGloballyPositioned { micCoordinates = it }
                         .clip(CircleShape)
                         .background(if (vm.voicePhase == VoicePhase.RECORDING) Color(0xFF1D4ED8) else MaterialTheme.colorScheme.primary)
-                        .pointerInput(vm.voicePhase) {
+                        .pointerInput(Unit) {
                             awaitEachGesture {
                                 awaitFirstDown(requireUnconsumed = false)
                                 val held = withTimeoutOrNull(LONG_PRESS_MS) {
@@ -387,7 +394,7 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                                     val inTarget = rootPosition != null &&
                                         cancelTargetCoordinates?.boundsInRoot()?.contains(rootPosition) == true
                                     vm.updateCancelTarget(inTarget)
-                                    if (change.changedToUpIgnoreConsumed()) {
+                                    if (change.changedToUpIgnoreConsumed() || !change.pressed) {
                                         vm.finishVoiceRecording(inTarget)
                                         change.consume()
                                         break
@@ -410,6 +417,22 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                     Text("00:${vm.recordingSeconds.toString().padStart(2, '0')}", style = MaterialTheme.typography.titleMedium)
                 }
             }
+            val prompt = when {
+                vm.voicePhase == VoicePhase.RECORDING && vm.cancelTargetActive -> "松开后取消"
+                vm.voicePhase == VoicePhase.RECORDING -> "松开完成，上滑到红色区域取消"
+                vm.voiceFeedback != null -> vm.voiceFeedback
+                else -> "长按说话"
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                prompt ?: "",
+                style = MaterialTheme.typography.labelMedium,
+                color = when {
+                    vm.voicePhase == VoicePhase.RECORDING && vm.cancelTargetActive -> Color(0xFFD92D20)
+                    vm.voiceFeedback != null -> Color(0xFF667085)
+                    else -> Color(0xFF667085)
+                },
+            )
         }
     }
 }

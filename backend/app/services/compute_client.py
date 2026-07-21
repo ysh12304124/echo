@@ -268,6 +268,8 @@ async def apply_audio_result(
         await repo.save_evidence(ev)
         embedding = providers.embedding()
         vector_store = providers.vector_store()
+        # TODO: 长音频转录应按时间或语义分段入库和嵌入；届时需要调整数据库结构，
+        # 让一条记忆对应多个 transcript 片段和文本向量，而不是当前单 Evidence/单向量。
         emb = await embedding.embed_document(transcript)
         await vector_store.upsert(
             str(ev.id),

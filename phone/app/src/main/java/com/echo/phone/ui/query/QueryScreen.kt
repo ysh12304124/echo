@@ -91,13 +91,16 @@ import java.io.IOException
 
 enum class VoicePhase { IDLE, RECORDING, TRANSCRIBING, SEARCHING }
 
+enum class QueryInputSource { TYPED, VOICE_TRANSCRIPT }
+
 class QueryViewModel(
     private val repo: com.echo.phone.data.EchoRepository,
     private val recorder: VoiceQueryRecorder = VoiceQueryRecorder(),
 ) : ViewModel() {
     var question by mutableStateOf("")
     var result by mutableStateOf<QueryResult?>(null)
-    var transcript by mutableStateOf<String?>(null)
+    var submittedQuery by mutableStateOf<String?>(null)
+    var submittedQuerySource by mutableStateOf<QueryInputSource?>(null)
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
     var voicePhase by mutableStateOf(VoicePhase.IDLE)
@@ -112,13 +115,16 @@ class QueryViewModel(
 
     fun submit() {
         if (question.isBlank() || loading || voicePhase != VoicePhase.IDLE) return
+        val query = question.trim()
+        question = ""
+        submittedQuery = query
+        submittedQuerySource = QueryInputSource.TYPED
         viewModelScope.launch {
             loading = true
             error = null
-            transcript = null
             result = null
             try {
-                result = repo.query(question.trim(), com.echo.phone.domain.QueryScope.GLOBAL_WORK)
+                result = repo.query(query, com.echo.phone.domain.QueryScope.GLOBAL_WORK)
             } catch (exception: Exception) {
                 error = exception.message ?: "查询失败"
             } finally {
@@ -134,7 +140,8 @@ class QueryViewModel(
         }
         error = null
         result = null
-        transcript = null
+        submittedQuery = null
+        submittedQuerySource = null
         recordingSeconds = 0
         cancelTargetActive = false
         voiceFeedback = null
@@ -188,15 +195,17 @@ class QueryViewModel(
                 }
 
                 val transcription = repo.transcribeVoice(audio)
-                transcript = transcription.transcript.ifBlank { null }
-                question = transcription.transcript
+                val query = transcription.transcript.trim()
+                question = ""
+                submittedQuery = query.ifBlank { null }
+                submittedQuerySource = if (query.isBlank()) null else QueryInputSource.VOICE_TRANSCRIPT
                 if (!transcription.asrAccepted) {
                     error = transcription.rejectionReason ?: "没听清，请再说一次"
                     return@launch
                 }
                 voicePhase = VoicePhase.SEARCHING
                 result = repo.query(
-                    transcription.transcript,
+                    query,
                     com.echo.phone.domain.QueryScope.GLOBAL_WORK,
                 )
             } catch (exception: Exception) {
@@ -294,9 +303,12 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                     .verticalScroll(rememberScrollState()),
             ) {
                 Spacer(Modifier.height(16.dp))
-                vm.transcript?.let { transcript ->
+                vm.submittedQuery?.let { submittedQuery ->
                     if (vm.voicePhase != VoicePhase.RECORDING) {
-                        TranscriptPreview(transcript)
+                        SubmittedQueryPreview(
+                            query = submittedQuery,
+                            source = vm.submittedQuerySource,
+                        )
                         Spacer(Modifier.height(12.dp))
                     }
                 }
@@ -541,7 +553,7 @@ private fun VoiceWaveBubble(cancelActive: Boolean) {
 }
 
 @Composable
-private fun TranscriptPreview(transcript: String) {
+private fun SubmittedQueryPreview(query: String, source: QueryInputSource?) {
     Box(
         Modifier
             .fillMaxWidth()
@@ -552,12 +564,16 @@ private fun TranscriptPreview(transcript: String) {
     ) {
         Column {
             Text(
-                "本次查询",
+                when (source) {
+                    QueryInputSource.VOICE_TRANSCRIPT -> "本次查询 · 语音转录"
+                    QueryInputSource.TYPED -> "本次查询 · 键盘输入"
+                    null -> "本次查询"
+                },
                 style = MaterialTheme.typography.labelMedium,
                 color = Color(0xFF667085),
             )
             Spacer(Modifier.height(4.dp))
-            Text(transcript, style = MaterialTheme.typography.bodyMedium)
+            Text(query, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

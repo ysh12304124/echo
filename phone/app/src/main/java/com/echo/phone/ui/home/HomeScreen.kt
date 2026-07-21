@@ -139,8 +139,9 @@ class HomeViewModel(
 
     fun connectGlasses() {
         viewModelScope.launch {
-            try { glasses.connect(); error = null }
-            catch (e: Exception) { error = "连接失败: ${e.message}" }
+            // 眼镜连接与记忆库读取相互独立；离线查看已完成记忆不能被连接失败遮住。
+            try { glasses.connect() }
+            catch (_: Exception) { }
         }
     }
 }

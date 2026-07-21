@@ -12,6 +12,7 @@ FastGS 参数走 ComputeSettings，见 app/settings.py 里以 "fastgs_" 开头�
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -64,15 +65,22 @@ def _run_fastgs(job_dir: Path, job_id: str, settings, log) -> dict:
         "--max_num_features", str(settings.fastgs_max_num_features),
         "--timeout-seconds", str(settings.fastgs_timeout_seconds),
         "--job-id", job_id,
+        # 允许没有 IMU manifest 时用视觉方式对齐（不做 gravity alignment，用 fallback）。
+        "--allow-alignment-fallback",
     ]
-    # apt 装的 colmap 通常无 CUDA，需要显式关掉 mapper/matching 的 GPU 开关。
-    env_extra = {}
+    # apt 装的 colmap 3.7 通常无 CUDA，且不支持 --colmap_new_api。
+    # 通过 FASTGS_* 环境变量控制内部脚本默认值。
+    env_extra = {
+        # 空间记忆场景下我们不用 CUDA colmap，即使 use_gpu=True 也要显式设 CUDA lib dir。
+        "FASTGS_CUDA_LIB_DIR": "",  # 无自定义 CUDA lib，用系统默认 LD_LIBRARY_PATH
+    }
     if not settings.fastgs_colmap_use_gpu:
-        env_extra = {
+        env_extra.update({
             "FASTGS_MAPPER_USE_GPU": "0",
             "FASTGS_MATCHING_USE_GPU": "0",
             "FASTGS_FEATURE_USE_GPU": "0",
-        }
+            "FASTGS_COLMAP_NEW_API": "0",  # apt colmap 3.7 无新 API
+        })
 
     env = os.environ.copy()
     env.update(env_extra)
@@ -106,38 +114,62 @@ def _run_fastgs(job_dir: Path, job_id: str, settings, log) -> dict:
     return json.loads(result_path.read_text(encoding="utf-8"))
 
 
+def _sha256_of(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _copy_to_blob(
     memory_id: str,
     job_result: dict,
     blob_root: Path,
     log,
-) -> tuple[str, str, str, dict]:
+) -> dict:
     """把 PLY/poses/anchor 从 job_dir 拷贝到 blob: spaces/{memory_id}/models/。
 
-    返回 (model_url, poses_url, anchor_url, anchor_json_dict)。
+    FastGS 新 run_pipeline.py 的 result.json 结构:
+        outputs: {point_cloud, poses_txt, poses_json, anchor}
+        anchor_method, registered_image_count 在顶层
+
+    返回 dict，含 URL / anchor_data / sha256。
     """
-    ply_src = Path(job_result["ply_path"])
-    poses_src = Path(job_result["poses_path"])
-    anchor_src = Path(job_result["anchor_path"])
+    outputs = job_result.get("outputs") or {}
+    ply_src_str = outputs.get("point_cloud")
+    poses_src_str = outputs.get("poses_txt")
+    anchor_src_str = outputs.get("anchor")
+    if not (ply_src_str and poses_src_str and anchor_src_str):
+        raise RuntimeError(f"result.json outputs 字段缺失: {outputs}")
+    ply_src = Path(ply_src_str)
+    poses_src = Path(poses_src_str)
+    anchor_src = Path(anchor_src_str)
     for p in (ply_src, poses_src, anchor_src):
         if not p.is_file():
             raise RuntimeError(f"FastGS 产出缺失: {p}")
 
     dst_dir = blob_root / "spaces" / memory_id / "models"
     dst_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy(ply_src, dst_dir / "point_cloud.ply")
-    shutil.copy(poses_src, dst_dir / "poses.txt")
-    shutil.copy(anchor_src, dst_dir / "anchor.json")
+    ply_dst = dst_dir / "point_cloud.ply"
+    poses_dst = dst_dir / "poses.txt"
+    anchor_dst = dst_dir / "anchor.json"
+    shutil.copy(ply_src, ply_dst)
+    shutil.copy(poses_src, poses_dst)
+    shutil.copy(anchor_src, anchor_dst)
     log.info("产物拷贝至 blob: %s", dst_dir)
 
     # backend 里 /api/v1/media/{key} 会读 blob_root/{key}
     base = f"/api/v1/media/spaces/{memory_id}/models"
-    model_url = f"{base}/point_cloud.ply"
-    poses_url = f"{base}/poses.txt"
-    anchor_url = f"{base}/anchor.json"
-
-    anchor_data = json.loads(anchor_src.read_text(encoding="utf-8"))
-    return model_url, poses_url, anchor_url, anchor_data
+    anchor_data = json.loads(anchor_dst.read_text(encoding="utf-8"))
+    return {
+        "model_url": f"{base}/point_cloud.ply",
+        "poses_url": f"{base}/poses.txt",
+        "anchor_url": f"{base}/anchor.json",
+        "poses_sha256": _sha256_of(poses_dst),
+        "anchor_sha256": _sha256_of(anchor_dst),
+        "anchor_data": anchor_data,
+    }
 
 
 async def run_space_analysis(
@@ -181,26 +213,34 @@ async def run_space_analysis(
 
         fastgs_result = _run_fastgs(job_dir, job_id, settings, log)
         blob_root = Path(settings.blob_storage_path).resolve()
-        model_url, poses_url, anchor_url, anchor_data = _copy_to_blob(
-            memory_id, fastgs_result, blob_root, log
-        )
+        copy = _copy_to_blob(memory_id, fastgs_result, blob_root, log)
 
+        anchor_data = copy["anchor_data"]
         anchor_pos = anchor_data.get("position") or {}
-        pose_count = int(fastgs_result.get("pose_count") or 0)
+        # FastGS run_pipeline.py 只输出 registered_image_count；老脚本用 pose_count，两个都兼容。
+        pose_count = int(
+            fastgs_result.get("registered_image_count")
+            or fastgs_result.get("pose_count")
+            or 0
+        )
+        anchor_method = (
+            fastgs_result.get("anchor_method")
+            or anchor_data.get("method")
+        )
         return {
-            "model_url": model_url,
+            "model_url": copy["model_url"],
             "model_format": "ply",
             "quality": "good",
             "loop_angle": None,
             "scene_summary": f"FastGS 完成 {pose_count} 帧，{frame_count} 张 JPEG",
             "identify_brief": f"空间记忆已重建（{pose_count} 帧位姿）",
-            "poses_url": poses_url,
-            "poses_sha256": fastgs_result.get("poses_sha256"),
+            "poses_url": copy["poses_url"],
+            "poses_sha256": copy["poses_sha256"],
             "pose_count": pose_count,
-            "anchor_url": anchor_url,
-            "anchor_sha256": fastgs_result.get("anchor_sha256"),
+            "anchor_url": copy["anchor_url"],
+            "anchor_sha256": copy["anchor_sha256"],
             "anchor": {
-                "method": anchor_data.get("method"),
+                "method": anchor_method,
                 "position": {
                     "x": float(anchor_pos.get("x", 0.0)),
                     "y": float(anchor_pos.get("y", 0.0)),

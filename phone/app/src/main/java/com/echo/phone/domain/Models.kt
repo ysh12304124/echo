@@ -24,6 +24,8 @@ data class Participant(
     val participantId: String,
     val name: String,
     val avatarUrl: String? = null,
+    /** 后端人物库匹配成功时提供；用于让跨记忆的人名保持一致。 */
+    val personId: String? = null,
 )
 
 data class MemorySummary(

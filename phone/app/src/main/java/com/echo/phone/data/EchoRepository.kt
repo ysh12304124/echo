@@ -130,8 +130,20 @@ class EchoRepository(private val api: EchoApiService) {
         api.updateMemory(memoryId, UpdateMemoryRequest(user_note = note))
     }
 
-    suspend fun updateTranscriptSpeaker(memoryId: String, segmentId: String, participantId: String?) {
-        api.updateTranscriptSpeaker(memoryId, segmentId, UpdateTranscriptSpeakerRequest(participantId))
+    suspend fun updateTranscriptSpeaker(memoryId: String, segmentId: String, participant: Participant) {
+        api.updateTranscriptSpeaker(
+            memoryId,
+            segmentId,
+            UpdateTranscriptSpeakerRequest(participant.participantId, participant.personId),
+        )
+    }
+
+    suspend fun renameMemoryParticipant(memoryId: String, participant: Participant, name: String) {
+        api.renameMemoryParticipant(
+            memoryId,
+            participant.participantId,
+            RenameMemoryParticipantRequest(name, participant.personId),
+        )
     }
 
     suspend fun deleteMemory(memoryId: String) {

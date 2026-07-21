@@ -26,11 +26,13 @@ class ComputeSettings(BaseSettings):
 
     # ---- 空间记忆(FastGS 3DGS) 相关配置 ----
     # FastGS 项目本地路径（含 train.py / convert.py / scripts/reconstruct_images.py）。
-    fastgs_dir: str = "compute/fastgs"
+    # 相对 compute 服务的 cwd 解析，也可以填绝对路径。
+    fastgs_dir: str = "fastgs"
     # 跑 FastGS 用的 Python 解释器（需装好 torch + FastGS 3 个 CUDA 子模块）。
-    fastgs_python: str = "/home/asus/miniconda3/envs/stmem/bin/python"
+    # Echo 项目专用 conda 环境，与其他项目隔离。
+    fastgs_python: str = "/home/asus/miniconda3/envs/echo/bin/python"
     # FastGS 的 conda 环境名（reconstruct_images.py 内部 conda run 用）。
-    fastgs_conda_env: str = "stmem"
+    fastgs_conda_env: str = "echo"
     # conda 二进制路径。
     fastgs_conda_executable: str = "/home/asus/miniconda3/bin/conda"
     # COLMAP 二进制路径（apt 装的默认在 /usr/bin/colmap）。

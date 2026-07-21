@@ -12,6 +12,15 @@ android {
             .orElse("http://192.168.1.130:8000/api/v1/")
             .get()
             .let { if (it.endsWith("/")) it else "$it/" }
+        val allowCleartext = providers.gradleProperty("ECHO_ALLOW_CLEARTEXT")
+            .orElse("true")
+            .get()
+            .toBooleanStrictOrNull() ?: true
+        val networkSecurityConfig = if (allowCleartext) {
+            "network_security_config_cleartext"
+        } else {
+            "network_security_config"
+        }
         applicationId = "com.echo.phone"
         // Rokid CXR-L SDK 要求 minSdk 31。
         minSdk = 31
@@ -21,6 +30,8 @@ android {
         // 真机通过局域网访问后台：改成运行 uvicorn 的电脑局域网 IP。
         // 模拟器用 10.0.2.2；真机用电脑 IP（如 192.168.1.130）。
         buildConfigField("String", "API_BASE_URL", "\"$apiBaseUrl\"")
+        buildConfigField("boolean", "ALLOW_CLEARTEXT_WHITELIST", allowCleartext.toString())
+        manifestPlaceholders["networkSecurityConfig"] = networkSecurityConfig
 
         // 眼镜端 Echo CustomApp 的包名与入口（须与 glasses/ 模块一致）。
         buildConfigField("String", "GLASS_APP_PACKAGE", "\"com.echo.glasses\"")

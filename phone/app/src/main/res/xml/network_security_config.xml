@@ -1,9 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">10.0.2.2</domain>
-        <domain includeSubdomains="true">localhost</domain>
-        <!-- 真机联调：后台电脑的局域网 IP，需与 API_BASE_URL 保持一致 -->
-        <domain includeSubdomains="true">192.168.1.130</domain>
-    </domain-config>
+    <base-config cleartextTrafficPermitted="false" />
 </network-security-config>

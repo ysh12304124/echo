@@ -20,6 +20,8 @@ const elements = {
 };
 
 let currentState = "not_loaded";
+let quantizationDirty = false;
+let pendingQuantization = null;
 let toastTimer;
 
 function formatBytes(bytes) {
@@ -55,7 +57,17 @@ function renderStatus(status) {
   elements.stateBadge.textContent = stateLabels[status.state] || status.state;
   elements.stateBadge.className = `state-badge ${status.state === "ready" ? "ready" : status.state === "error" ? "error" : "busy"}`;
   elements.modelSummary.textContent = `${status.quantization?.toUpperCase() || "--"} · ${status.embedding_dimension} 维 · ${status.image_count} 张图片`;
-  if (status.quantization) elements.quantization.value = status.quantization;
+  if (
+    pendingQuantization &&
+    status.state === "ready" &&
+    status.quantization === pendingQuantization
+  ) {
+    pendingQuantization = null;
+    quantizationDirty = false;
+  }
+  if (status.quantization && !quantizationDirty && !pendingQuantization) {
+    elements.quantization.value = status.quantization;
+  }
 
   const gpu = status.gpu || {};
   elements.gpuName.textContent = gpu.device_name || "--";
@@ -148,8 +160,14 @@ elements.form.addEventListener("submit", async (event) => {
   }
 });
 
+elements.quantization.addEventListener("change", () => {
+  quantizationDirty = true;
+});
+
 elements.reloadButton.addEventListener("click", async () => {
   const quantization = elements.quantization.value;
+  pendingQuantization = quantization;
+  quantizationDirty = true;
   setBusy(true);
   elements.resultsGrid.replaceChildren();
   elements.emptyState.hidden = false;
@@ -163,6 +181,7 @@ elements.reloadButton.addEventListener("click", async () => {
     currentState = "loading_model";
     notify(`已开始切换到 ${quantization.toUpperCase()}`);
   } catch (error) {
+    pendingQuantization = null;
     notify(error.message, true);
   }
 });

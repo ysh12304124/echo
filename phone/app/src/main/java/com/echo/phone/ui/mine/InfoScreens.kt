@@ -63,7 +63,7 @@ fun DeviceScreen(onBack: () -> Unit) {
 
 @Composable
 fun HelpScreen(onBack: () -> Unit) {
-    InfoScaffold("帮助说明", onBack) {
+    InfoScaffold("帮助与说明", onBack) {
         Text("LED 指示灯", style = MaterialTheme.typography.titleMedium)
         Text("· 白灯常亮：待机")
         Text("· 蓝灯常亮：录制中")

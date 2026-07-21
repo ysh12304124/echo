@@ -1,6 +1,27 @@
+# compute 服务本身依赖（HTTP + 日志）
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 pydantic>=2.9.0
 pydantic-settings>=2.6.0
 httpx>=0.27.0
 python-multipart>=0.0.12
+
+# ---- FastGS 3DGS 空间记忆依赖 ----
+# compute 通过 subprocess 调用 FastGS scripts/reconstruct_images.py，跑在独立 Python 环境
+# （见 ComputeSettings.fastgs_python，默认 /home/asus/miniconda3/envs/stmem/bin/python）。
+# 那个 Python 环境需要下列包（不要装进 compute 自己的 .venv，会撞 torch 版本）：
+#   torch>=2.0 + 匹配的 CUDA        —— PyTorch 官方 wheel
+#   torchvision
+#   numpy
+#   plyfile>=1.0
+#   tqdm
+#   opencv-python
+#   Pillow
+# 加上 3 个 FastGS CUDA 扩展（从 compute/fastgs/submodules/ 源码编译）：
+#   pip install --no-build-isolation \
+#     compute/fastgs/submodules/diff-gaussian-rasterization_fastgs \
+#     compute/fastgs/submodules/simple-knn \
+#     compute/fastgs/submodules/fused-ssim
+#
+# 系统层还需要：
+#   apt install colmap ffmpeg

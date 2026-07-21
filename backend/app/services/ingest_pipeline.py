@@ -57,6 +57,7 @@ class IngestPipeline:
         self,
         memory_type: MemoryType,
         scene: TimeScene | None = None,
+        scene_type: str | None = None,
         partition: DataPartition = DataPartition.WORK,
         title: str = "",
     ) -> IngestSession:
@@ -73,6 +74,7 @@ class IngestPipeline:
         session = IngestSession(
             memory_type=memory_type,
             scene=scene,
+            scene_type=scene_type,
             partition=partition,
             status=MemoryStatus.RECORDING,
             title=title,
@@ -237,6 +239,11 @@ class IngestPipeline:
         blob = self.providers.blob_store()
         imu_path = await blob.get_path(f"sessions/{session.id}/imu/imu.jsonl")
 
+        # 采集时长（秒）：从会话创建时间到现在，供渲染层计算移动速度基准。
+        duration_sec = max(
+            0.0, (datetime.now(timezone.utc) - _as_utc(session.created_at)).total_seconds()
+        )
+
         memory = SpaceMemory(
             partition=session.partition,
             status=MemoryStatus.PROCESSING,
@@ -244,12 +251,14 @@ class IngestPipeline:
             identify_brief=session.title or "空间采集，正在分析",
             session_id=session.id,
             title=session.title or "空间记忆",
+            scene_type=session.scene_type,
+            recording_duration_sec=duration_sec,
         )
         await self.repo.create_space_memory(memory)
         await self.repo.link_session_memory(session.id, memory.id, MemoryStatus.PROCESSING)
         log.info(
-            "空间记忆已创建,等待算力异步重建 memory=%s session=%s video=%s imu=%s",
-            memory.id, session.id, video_path, imu_path,
+            "空间记忆已创建,等待算力异步重建 memory=%s session=%s scene_type=%s duration=%.1fs video=%s imu=%s",
+            memory.id, session.id, session.scene_type, duration_sec, video_path, imu_path,
         )
 
         job = SpaceAnalyzeJob(
@@ -258,6 +267,8 @@ class IngestPipeline:
             partition=session.partition,
             video_path=video_path,
             imu_path=imu_path,
+            scene_type=session.scene_type,
+            recording_duration_sec=duration_sec,
         )
         await self.compute_client.submit_space(job)
         log.info("空间分析任务已提交算力服务 session=%s memory=%s job=%s", session.id, memory.id, job.job_id)

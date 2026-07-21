@@ -59,6 +59,16 @@ class EchoApplication : Application() {
     private val _justCompletedScene = MutableStateFlow<TimeScene?>(null)
     val justCompletedScene: StateFlow<TimeScene?> = _justCompletedScene.asStateFlow()
 
+    // 用户在 HomeScreen 上选择的空间记忆场景类型（LARGE=大场景 / OBJECT=单物体）。
+    // 会在下一次录制开始时透传给 backend，决定 SpaceMemory.scene_type，
+    // 进而决定手机端 PointCloudViewer 的默认查看模式。
+    private val _pendingSpaceSceneType = MutableStateFlow(SpaceSceneType.LARGE)
+    val pendingSpaceSceneType: StateFlow<SpaceSceneType> = _pendingSpaceSceneType.asStateFlow()
+    fun setPendingSpaceSceneType(type: SpaceSceneType) {
+        _pendingSpaceSceneType.value = type
+        EchoLog.i("空间记忆场景类型已切换为 $type")
+    }
+
     override fun onCreate() {
         super.onCreate()
         EchoLog.init(this)
@@ -129,7 +139,13 @@ class EchoApplication : Application() {
         try {
             _activeScene.value = scene
             _justCompletedScene.value = null
-            val id = recordingController.startTime(scene, partition, "${scene.name} 记录", command.glassSid)
+            val id = recordingController.startTime(
+                scene,
+                partition,
+                "${scene.name} 记录",
+                command.glassSid,
+                sceneType = _pendingSpaceSceneType.value,
+            )
             EchoLog.i("录制已启动，后台 session=$id")
         } catch (e: Exception) {
             isRecording.set(false)

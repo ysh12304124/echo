@@ -76,5 +76,6 @@ dependencies {
     // 鉴权由 Rokid AI App（≥1.9.0）承担，无需 appId/appSecret。
     implementation("com.rokid.cxr:client-l:1.0.4")
 
+    testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

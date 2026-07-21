@@ -24,6 +24,34 @@ class ComputeSettings(BaseSettings):
     asr_api_key: str = "not-needed"
     asr_language: Optional[str] = "zh"
 
+    # ---- 空间记忆(FastGS 3DGS) 相关配置 ----
+    # FastGS 项目本地路径（含 train.py / convert.py / scripts/reconstruct_images.py）。
+    fastgs_dir: str = "compute/fastgs"
+    # 跑 FastGS 用的 Python 解释器（需装好 torch + FastGS 3 个 CUDA 子模块）。
+    fastgs_python: str = "/home/asus/miniconda3/envs/stmem/bin/python"
+    # FastGS 的 conda 环境名（reconstruct_images.py 内部 conda run 用）。
+    fastgs_conda_env: str = "stmem"
+    # conda 二进制路径。
+    fastgs_conda_executable: str = "/home/asus/miniconda3/bin/conda"
+    # COLMAP 二进制路径（apt 装的默认在 /usr/bin/colmap）。
+    fastgs_colmap_executable: str = "/usr/bin/colmap"
+    # FastGS 训练迭代次数（3000 快速验证，30000 高质量）。
+    fastgs_train_iterations: int = 3000
+    # 视频抽帧帧率（fps）。经验：15fps 对普通手持视频足够 COLMAP 特征匹配。
+    fastgs_extract_fps: int = 15
+    # FastGS 单次任务的最大用时（秒）。
+    fastgs_timeout_seconds: int = 2400
+    # COLMAP 是否用 GPU（apt colmap 常无 CUDA，默认关闭）。
+    fastgs_colmap_use_gpu: bool = False
+    # 特征提取的最大特征数上限（FastGS 默认 8192）。
+    fastgs_max_num_features: int = 8192
+    # 工作根目录，每个 job 用 <root>/<job_id>/ 作为独立工作区。
+    fastgs_work_root: str = "/tmp/echo-fastgs"
+
+    # Blob 共享盘路径（与 backend 的 ECHO_BLOB_STORAGE_PATH 相同）。
+    # compute 把 PLY/poses/anchor 写到这里，backend /api/v1/media 会自动服务。
+    blob_storage_path: str = "../backend/data/blobs"
+
 
 @lru_cache
 def get_settings() -> ComputeSettings:

@@ -19,6 +19,7 @@ class SessionORM(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     memory_type: Mapped[str] = mapped_column(String(20))
     scene: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    scene_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     partition: Mapped[str] = mapped_column(String(20))
     status: Mapped[str] = mapped_column(String(20))
     memory_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
@@ -178,6 +179,8 @@ async def init_db():
         session_columns = {row[1] for row in result.fetchall()}
         if "video_path" not in session_columns:
             await conn.execute(text("ALTER TABLE ingest_sessions ADD COLUMN video_path TEXT"))
+        if "scene_type" not in session_columns:
+            await conn.execute(text("ALTER TABLE ingest_sessions ADD COLUMN scene_type TEXT"))
 
 
 async def get_db() -> AsyncSession:

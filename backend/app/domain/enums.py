@@ -65,6 +65,16 @@ class SpaceQuality(StrEnum):
     RETRY_REQUIRED = "retry_required"
 
 
+class SpaceSceneType(StrEnum):
+    """空间记忆场景类型：由手机端在开始录制时选择，决定后期渲染的默认模式。
+
+    - LARGE：大场景（房间/走廊等）→ 手机端默认「路径浏览」
+    - OBJECT：单物体环绕 → 手机端默认「物体环绕」
+    """
+    LARGE = "large"
+    OBJECT = "object"
+
+
 class EventType(StrEnum):
     SPEAKER_CHANGE = "speaker_change"
     WHITEBOARD_CHANGE = "whiteboard_change"

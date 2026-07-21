@@ -3,6 +3,13 @@ package com.echo.phone.domain
 enum class DataPartition { WORK, QUALITY_TIME }
 enum class TimeScene { MEETING, ONSITE, QUALITY_TIME }
 enum class MemoryType { TIME, SPACE }
+
+/**
+ * 空间记忆场景类型：由手机端在开始录制空间记忆前选择，
+ * 决定后期查看时 PointCloudViewer 的默认模式（LARGE→路径浏览，OBJECT→物体环绕）。
+ */
+enum class SpaceSceneType { LARGE, OBJECT }
+
 enum class MemoryStatus {
     NOT_STARTED, RECORDING, PAUSED, UPLOADING, PROCESSING, COMPLETED, FAILED
 }
@@ -11,6 +18,13 @@ enum class QueryResultStatus { CONFIRMED, POSSIBLE, NOT_FOUND }
 enum class EvidenceType { VISUAL, TRANSCRIPT, OCR, SPATIAL, USER_NOTE }
 enum class ConfidenceLevel { HIGH, MEDIUM, LOW }
 enum class GlassesConnectionState { DISCONNECTED, CONNECTING, CONNECTED, RECORDING }
+enum class EmotionalTone { HAPPY, ANGRY, SAD, EXCITED, NEUTRAL }
+
+data class Participant(
+    val participantId: String,
+    val name: String,
+    val avatarUrl: String? = null,
+)
 
 data class MemorySummary(
     val memoryId: String,
@@ -24,6 +38,8 @@ data class MemorySummary(
     val durationSeconds: Int = 0,
     val evidenceStatus: String = "pending",
     val isFavorited: Boolean = false,
+    val eventOverview: String = "",
+    val location: String = "",
 )
 
 data class NavigationSummary(
@@ -50,6 +66,26 @@ data class TimeMemoryDetail(
     val keyFrames: List<KeyFrame> = emptyList(),
     val durationSeconds: Int,
     val startedAt: String? = null,
+    val eventOverview: String = "",
+    val location: String = "",
+    val participants: List<Participant> = emptyList(),
+    val conversationHighlights: List<ConversationHighlight> = emptyList(),
+    val transcriptSegments: List<TranscriptSegment> = emptyList(),
+)
+
+data class ConversationHighlight(
+    val highlightId: String,
+    val participant: Participant?,
+    val emotion: EmotionalTone = EmotionalTone.NEUTRAL,
+    val content: String,
+    val timestampMs: Long = 0,
+)
+
+data class TranscriptSegment(
+    val segmentId: String,
+    val participant: Participant?,
+    val content: String,
+    val timestampMs: Long,
 )
 
 data class CameraPose(

@@ -144,6 +144,7 @@ class IngestSession(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     memory_type: MemoryType
     scene: Optional[TimeScene] = None
+    scene_type: Optional[str] = None  # 空间记忆专用：LARGE / OBJECT
     partition: DataPartition = DataPartition.WORK
     status: MemoryStatus = MemoryStatus.RECORDING
     memory_id: Optional[UUID] = None

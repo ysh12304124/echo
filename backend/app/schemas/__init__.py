@@ -13,6 +13,7 @@ from app.domain.enums import (
     QueryResultStatus,
     QueryScope,
     SpaceQuality,
+    SpaceSceneType,
     TimeScene,
 )
 from app.domain.models import NavigationSummary
@@ -34,6 +35,7 @@ def format_beijing_time(value: Optional[datetime]) -> Optional[str]:
 class CreateSessionRequest(BaseModel):
     memory_type: MemoryType
     scene: Optional[TimeScene] = None
+    scene_type: Optional[SpaceSceneType] = None  # 空间记忆场景类型（LARGE/OBJECT）
     partition: DataPartition = DataPartition.WORK
     title: str = ""
 
@@ -42,6 +44,7 @@ class IngestSessionResponse(BaseModel):
     session_id: UUID
     memory_type: MemoryType
     scene: Optional[TimeScene] = None
+    scene_type: Optional[SpaceSceneType] = None
     partition: DataPartition
     status: MemoryStatus
     created_at: datetime

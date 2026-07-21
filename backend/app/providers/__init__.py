@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     visual_retrieval_candidates: int = 10
     visual_retrieval_top_k: int = 3
     visual_retrieval_min_score: float = 0.37
+    visual_retrieval_medium_score: float = 0.40
+    visual_retrieval_high_score: float = 0.45
     visual_max_image_bytes: int = 10 * 1024 * 1024
 
     # 算力服务（compute/，独立进程，同机 localhost 通信）。
@@ -72,6 +74,8 @@ class Settings(BaseSettings):
     reranker_candidates: int = 20
     reranker_top_k: int = 5
     reranker_min_score: float = 0.5
+    reranker_medium_score: float = 0.65
+    reranker_high_score: float = 0.8
     reranker_timeout_seconds: float = 10.0
     voice_query_max_seconds: int = 60
     voice_query_min_seconds: float = 0.5

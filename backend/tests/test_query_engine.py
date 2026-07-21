@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 
 from app.domain.enums import (
+    ConfidenceLevel,
     DataPartition,
     EvidenceType,
     MemoryStatus,
@@ -12,7 +13,11 @@ from app.domain.enums import (
     TimeScene,
 )
 from app.domain.models import Evidence, TimeMemory
-from app.services.query_engine import QueryEngine, RetrievedEvidence
+from app.services.query_engine import (
+    QueryEngine,
+    RetrievedEvidence,
+    retrieval_confidence,
+)
 
 
 class StubRepository:
@@ -29,7 +34,11 @@ class StubRepository:
 
 class StubLLM:
     async def answer_query_structured(self, _question, _evidence_context):
-        return {"answer": "下周三", "confidence": "high"}
+        return {
+            "answer": "下周三",
+            "confidence": "high",
+            "used_evidence_refs": ["文本1"],
+        }
 
     async def answer_query_multimodal(self, question, evidence_context, images):
         return await self.answer_query_structured(question, evidence_context)
@@ -82,6 +91,45 @@ async def test_query_with_ranked_evidence_uses_configured_top_k():
 
 
 @pytest.mark.asyncio
+async def test_query_rejects_answer_when_model_marks_evidence_insufficient():
+    memory = TimeMemory(
+        title="东泵房巡检",
+        scene=TimeScene.ONSITE,
+        partition=DataPartition.WORK,
+        status=MemoryStatus.COMPLETED,
+    )
+    evidence = Evidence(
+        id=uuid4(),
+        memory_id=memory.id,
+        type=EvidenceType.TRANSCRIPT,
+        content="东泵房黄色手轮阀由高师傅复检",
+    )
+    repo = StubRepository(memory)
+
+    class InsufficientLLM(StubLLM):
+        async def answer_query_multimodal(self, question, evidence_context, images):
+            return {
+                "answer": "高师傅负责复检",
+                "confidence": "medium",
+                "evidence_sufficient": False,
+                "used_evidence_refs": ["文本1"],
+            }
+
+    providers = SimpleNamespace(
+        llm=lambda: InsufficientLLM(),
+        blob_store=lambda: StubBlobStore(),
+    )
+    engine = RankedEvidenceQueryEngine(repo, providers, evidence)
+
+    result = await engine.query("南泵房红色蝶阀由谁复检？", QueryScope.GLOBAL_WORK)
+
+    assert result.status == QueryResultStatus.NOT_FOUND
+    assert result.answer is None
+    assert result.uncertainty_reason == "检索证据不足，无法回答"
+    assert result.evidences[0].used_in_answer is False
+
+
+@pytest.mark.asyncio
 async def test_query_passes_visual_evidence_to_multimodal_llm(tmp_path):
     image_path = tmp_path / "frame.png"
     image_path.write_bytes(b"png")
@@ -106,7 +154,11 @@ async def test_query_passes_visual_evidence_to_multimodal_llm(tmp_path):
 
         async def answer_query_multimodal(self, question, evidence_context, images):
             self.images = images
-            return {"answer": "图片是红色", "confidence": "high"}
+            return {
+                "answer": "图片1是红色",
+                "confidence": "high",
+                "used_evidence_refs": ["图片1"],
+            }
 
     llm = MultimodalStub()
     providers = SimpleNamespace(
@@ -124,8 +176,118 @@ async def test_query_passes_visual_evidence_to_multimodal_llm(tmp_path):
 
     assert result.status == QueryResultStatus.CONFIRMED
     assert result.evidences[0].media_url == str(image_path)
+    assert result.evidences[0].used_in_answer is True
     assert len(llm.images) == 1
-    assert llm.images[0].caption == "图片1: 红色测试图片"
+    assert llm.images[0].caption.startswith("图片1: 红色测试图片;")
+
+
+@pytest.mark.parametrize(
+    ("score", "expected"),
+    [
+        (0.39, ConfidenceLevel.LOW),
+        (0.40, ConfidenceLevel.MEDIUM),
+        (0.449, ConfidenceLevel.MEDIUM),
+        (0.45, ConfidenceLevel.HIGH),
+    ],
+)
+def test_retrieval_confidence_uses_model_score(score, expected):
+    assert retrieval_confidence(score, 0.40, 0.45) == expected
+
+
+@pytest.mark.asyncio
+async def test_query_keeps_unselected_low_relevance_visual_for_debugging(tmp_path):
+    image_path = tmp_path / "candidate.png"
+    image_path.write_bytes(b"png")
+    memory = TimeMemory(
+        title="候选图片",
+        scene=TimeScene.MEETING,
+        partition=DataPartition.WORK,
+        status=MemoryStatus.COMPLETED,
+    )
+    evidence = Evidence(
+        id=uuid4(),
+        memory_id=memory.id,
+        type=EvidenceType.VISUAL,
+        content="低相关候选",
+        media_path=str(image_path),
+        confidence=ConfidenceLevel.LOW,
+        metadata={"source_confidence": "high", "similarity_score": 0.381},
+    )
+    repo = StubRepository(memory)
+
+    class RefusingLLM(StubLLM):
+        async def answer_query_multimodal(self, question, evidence_context, images):
+            return {
+                "answer": "",
+                "confidence": "low",
+                "used_evidence_refs": [],
+            }
+
+    providers = SimpleNamespace(
+        llm=lambda: RefusingLLM(),
+        blob_store=lambda: StubBlobStore(),
+    )
+    engine = RankedEvidenceQueryEngine(repo, providers, evidence)
+
+    async def retrieve_visual(*_args):
+        return _visual_result(evidence)
+
+    engine._retrieve = retrieve_visual
+
+    result = await engine.query("不相关的问题", QueryScope.GLOBAL_WORK)
+
+    assert result.status == QueryResultStatus.NOT_FOUND
+    assert result.uncertainty_reason == "检索证据不足，无法回答"
+    assert len(result.evidences) == 1
+    assert result.evidences[0].confidence == ConfidenceLevel.LOW
+    assert result.evidences[0].source_confidence == ConfidenceLevel.HIGH
+    assert result.evidences[0].retrieval_score == pytest.approx(0.381)
+    assert result.evidences[0].used_in_answer is False
+
+
+@pytest.mark.asyncio
+async def test_query_rejects_answer_with_unbound_image_reference(tmp_path):
+    image_path = tmp_path / "candidate.png"
+    image_path.write_bytes(b"png")
+    memory = TimeMemory(
+        title="候选图片",
+        scene=TimeScene.MEETING,
+        partition=DataPartition.WORK,
+        status=MemoryStatus.COMPLETED,
+    )
+    evidence = Evidence(
+        id=uuid4(),
+        memory_id=memory.id,
+        type=EvidenceType.VISUAL,
+        content="候选图片",
+        media_path=str(image_path),
+    )
+    repo = StubRepository(memory)
+
+    class InvalidRefLLM(StubLLM):
+        async def answer_query_multimodal(self, question, evidence_context, images):
+            return {
+                "answer": "图片2显示了答案",
+                "confidence": "high",
+                "used_evidence_refs": ["图片2"],
+            }
+
+    providers = SimpleNamespace(
+        llm=lambda: InvalidRefLLM(),
+        blob_store=lambda: StubBlobStore(),
+    )
+    engine = RankedEvidenceQueryEngine(repo, providers, evidence)
+
+    async def retrieve_visual(*_args):
+        return _visual_result(evidence)
+
+    engine._retrieve = retrieve_visual
+
+    result = await engine.query("图片是什么？", QueryScope.GLOBAL_WORK)
+
+    assert result.status == QueryResultStatus.NOT_FOUND
+    assert result.answer is None
+    assert result.evidences[0].used_in_answer is False
 
 
 @pytest.mark.asyncio

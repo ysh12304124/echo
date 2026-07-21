@@ -142,10 +142,22 @@ class LocalLLMProvider(LLMProvider):
     ) -> dict:
         system = (
             "你是识境 Echo 的图文查询助手。严格遵守证据优先原则：只能依据提供的文字证据 "
-            "和图片回答，绝不猜测、不臆造。若证据不足以支撑确定答案，answer 返回空字符串。"
-            "图片由系统按‘图片1’、‘图片2’编号；需要引用时只能使用这些编号。"
+            "和图片回答，绝不猜测、不臆造。候选证据来自检索初筛，可能包含与问题无关的内容；"
+            "必须结合具体问题逐条判断，只使用真正支撑答案的证据，忽略其他候选。"
+            "检索相关性等级和分数仅供参考，不是决定条件；低分证据如果确实回答问题也可以使用。"
+            "关键帧质量只表示图片本身是否可靠，不表示图片与当前问题相关。"
+            "必须核对问题中的地点、颜色、设备类型、型号、编号、人物和时间等限定条件。"
+            "候选证据只描述近似对象但关键限定条件不一致时，视为不相关，禁止拿近邻对象替代回答。"
+            "例如问题询问南区红色蝶阀，而证据只描述东区黄色手轮阀，即使都属于阀门，"
+            "evidence_sufficient 也必须为 false 并拒绝回答。"
+            "文字和图片分别按‘文本1’、‘图片1’编号。used_evidence_refs 只能填写实际用于回答的编号，"
+            "不得为了覆盖所有候选而全部引用。"
+            "若所有候选都无法支撑答案，answer 返回空字符串、confidence 返回 low、"
+            "evidence_sufficient 返回 false、used_evidence_refs 返回空数组。"
             "不要生成、猜测或复述任何图片 URL，也不要输出 Markdown 图片语法，图片地址由系统绑定。"
-            "输出 JSON: {\"answer\": \"...\", \"confidence\": \"high|medium|low\"}。"
+            "输出 JSON: {\"answer\": \"...\", \"confidence\": \"high|medium|low\", "
+            "\"evidence_sufficient\": true|false, "
+            "\"used_evidence_refs\": [\"文本1\", \"图片1\"]}。"
             "answer 为空时 confidence 用 low。"
         )
         content: list[dict] = [
@@ -179,11 +191,24 @@ class LocalLLMProvider(LLMProvider):
         )
         parsed = parse_json_loose(response)
         if isinstance(parsed, dict):
+            raw_refs = parsed.get("used_evidence_refs")
+            used_refs = (
+                [str(item).strip() for item in raw_refs if str(item).strip()]
+                if isinstance(raw_refs, list)
+                else []
+            )
             return {
                 "answer": (parsed.get("answer") or "").strip(),
                 "confidence": parsed.get("confidence", "low"),
+                "evidence_sufficient": parsed.get("evidence_sufficient") is True,
+                "used_evidence_refs": used_refs,
             }
-        return {"answer": "", "confidence": "low"}
+        return {
+            "answer": "",
+            "confidence": "low",
+            "evidence_sufficient": False,
+            "used_evidence_refs": [],
+        }
 
     async def build_navigation_summary(self, scene: str, transcript: str) -> dict:
         system = (

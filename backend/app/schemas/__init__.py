@@ -188,6 +188,9 @@ class QueryEvidenceResponse(BaseModel):
     type: EvidenceType
     content: str
     confidence: ConfidenceLevel
+    source_confidence: Optional[ConfidenceLevel] = None
+    retrieval_score: Optional[float] = None
+    used_in_answer: bool = False
     media_url: Optional[str] = None
     timestamp_ms: int = 0
 

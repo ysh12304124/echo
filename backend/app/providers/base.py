@@ -79,7 +79,7 @@ class LLMProvider(ABC):
         evidence_context: str,
         images: list[ImageInput],
     ) -> dict:
-        """Answer from text and images; text-only providers retain the old behavior."""
+        """Return answer, confidence, and the evidence refs actually used."""
         return await self.answer_query_structured(question, evidence_context)
 
     async def build_navigation_summary(self, scene: str, transcript: str) -> dict:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
@@ -25,6 +26,16 @@ from app.services.bm25 import BM25Document, BM25Index, normalize_scores
 class RetrievedEvidence:
     text: list[Evidence]
     visual: list[Evidence]
+
+
+def retrieval_confidence(
+    score: float, medium_score: float, high_score: float
+) -> ConfidenceLevel:
+    if score >= high_score:
+        return ConfidenceLevel.HIGH
+    if score >= medium_score:
+        return ConfidenceLevel.MEDIUM
+    return ConfidenceLevel.LOW
 
 
 class QueryEngine:
@@ -61,11 +72,14 @@ class QueryEngine:
             await self._log(query_id, question, scope, result)
             return result
 
-        settings = get_settings()
+        settings = getattr(self.providers, "settings", get_settings())
         text_top = retrieved.text[: settings.reranker_top_k]
         blob = self.providers.blob_store()
+        evidence_refs: dict[UUID, str] = {
+            evidence.id: f"文本{index}"
+            for index, evidence in enumerate(text_top, start=1)
+        }
         visual_top: list[Evidence] = []
-        visual_refs: dict[UUID, str] = {}
         images: list[ImageInput] = []
         for evidence in retrieved.visual[: settings.visual_retrieval_top_k]:
             if not evidence.media_path:
@@ -75,81 +89,171 @@ class QueryEngine:
                 continue
             ref = f"图片{len(visual_top) + 1}"
             visual_top.append(evidence)
-            visual_refs[evidence.id] = ref
-            images.append(ImageInput(path=path, caption=f"{ref}: {evidence.content}"))
+            evidence_refs[evidence.id] = ref
+            score = evidence.metadata.get("similarity_score")
+            score_text = f"{float(score):.4f}" if score is not None else "未知"
+            images.append(
+                ImageInput(
+                    path=path,
+                    caption=(
+                        f"{ref}: {evidence.content}; CLIP相关度={score_text}; "
+                        f"相关性等级={evidence.confidence.value}"
+                    ),
+                )
+            )
 
         top = text_top + visual_top
         if not top:
             result = QueryResponse(query_id=query_id, status=QueryResultStatus.NOT_FOUND)
             await self._log(query_id, question, scope, result)
             return result
-        evidence_context = "\n".join(
-            (
-                f"[{e.type.value}][{visual_refs[e.id]}] {e.content} "
-                f"(confidence={e.confidence.value})"
-                if e.type == EvidenceType.VISUAL
-                else f"[{e.type.value}] {e.content} (confidence={e.confidence.value})"
-            )
-            for e in top
-        )
+        context_lines: list[str] = []
+        for evidence in top:
+            ref = evidence_refs[evidence.id]
+            if evidence.type == EvidenceType.VISUAL:
+                score = evidence.metadata.get("similarity_score")
+                score_text = f"{float(score):.4f}" if score is not None else "未知"
+                source_confidence = str(
+                    evidence.metadata.get("source_confidence") or "未知"
+                )
+                context_lines.append(
+                    f"[{ref}][visual] {evidence.content} "
+                    f"(CLIP相关度={score_text}, 相关性等级={evidence.confidence.value}, "
+                    f"关键帧质量={source_confidence}; 分数和等级仅供参考)"
+                )
+            else:
+                score = evidence.metadata.get("retrieval_score")
+                if score is not None:
+                    source_confidence = str(
+                        evidence.metadata.get("source_confidence") or "未知"
+                    )
+                    context_lines.append(
+                        f"[{ref}][{evidence.type.value}] {evidence.content} "
+                        f"(Reranker相关度={float(score):.4f}, "
+                        f"相关性等级={evidence.confidence.value}, "
+                        f"来源置信度={source_confidence}; 分数和等级仅供参考)"
+                    )
+                else:
+                    context_lines.append(
+                        f"[{ref}][{evidence.type.value}] {evidence.content} "
+                        f"(来源置信度={evidence.confidence.value})"
+                    )
+        evidence_context = "\n".join(context_lines)
 
         llm = self.providers.llm()
         structured = await llm.answer_query_multimodal(
             question, evidence_context, images
         )
         answer = (structured.get("answer") or "").strip()
-        llm_conf = structured.get("confidence", "low")
+        llm_conf = str(structured.get("confidence") or "low").lower()
+        if llm_conf not in {"high", "medium", "low"}:
+            llm_conf = "low"
 
-        high_conf = [e for e in top if e.confidence == ConfidenceLevel.HIGH]
-        low_conf = [e for e in top if e.confidence != ConfidenceLevel.HIGH]
+        allowed_refs = set(evidence_refs.values())
+        raw_refs = structured.get("used_evidence_refs")
+        refs_provided = isinstance(raw_refs, list)
+        used_refs: list[str] = []
+        invalid_refs = False
+        if refs_provided:
+            for item in raw_refs:
+                ref = str(item).strip()
+                if ref not in allowed_refs:
+                    invalid_refs = True
+                    continue
+                if ref not in used_refs:
+                    used_refs.append(ref)
+
+        mentioned_image_refs = set(re.findall(r"图片\d+", answer))
+        if not refs_provided:
+            if mentioned_image_refs:
+                used_refs = [
+                    ref for ref in evidence_refs.values() if ref in mentioned_image_refs
+                ]
+            elif not visual_top:
+                # Compatibility for legacy text-only providers.
+                used_refs = [evidence_refs[evidence.id] for evidence in text_top]
+        used_ref_set = set(used_refs)
+        if (
+            mentioned_image_refs - allowed_refs
+            or mentioned_image_refs - used_ref_set
+        ):
+            invalid_refs = True
+        evidence_sufficient = structured.get("evidence_sufficient", True) is True
+        if answer in {"检索证据不足，无法回答", "证据不足，无法回答"}:
+            answer = ""
+        if answer and (invalid_refs or not used_refs or not evidence_sufficient):
+            answer = ""
+            llm_conf = "low"
+            used_refs = []
+            used_ref_set = set()
+
+        selected = [
+            evidence
+            for evidence in top
+            if evidence_refs[evidence.id] in used_ref_set
+        ]
+        used_ids = {evidence.id for evidence in selected}
+
         def ev_responses(items: list[Evidence]) -> list[QueryEvidenceResponse]:
-            return [
-                QueryEvidenceResponse(
-                    evidence_id=e.id,
-                    type=e.type,
-                    content=e.content,
-                    confidence=e.confidence,
-                    media_url=blob.get_url(e.media_path) if e.media_path else None,
-                    timestamp_ms=e.timestamp_ms,
+            responses: list[QueryEvidenceResponse] = []
+            for evidence in items[:8]:
+                source_raw = evidence.metadata.get("source_confidence")
+                source_confidence = None
+                if source_raw:
+                    try:
+                        source_confidence = ConfidenceLevel(str(source_raw))
+                    except ValueError:
+                        source_confidence = None
+                elif evidence.type != EvidenceType.VISUAL:
+                    source_confidence = evidence.confidence
+                score_raw = evidence.metadata.get(
+                    "retrieval_score", evidence.metadata.get("similarity_score")
                 )
-                for e in items[:8]
-            ]
+                retrieval_score = (
+                    float(score_raw) if score_raw is not None else None
+                )
+                responses.append(
+                    QueryEvidenceResponse(
+                        evidence_id=evidence.id,
+                        type=evidence.type,
+                        content=evidence.content,
+                        confidence=evidence.confidence,
+                        source_confidence=source_confidence,
+                        retrieval_score=retrieval_score,
+                        used_in_answer=evidence.id in used_ids,
+                        media_url=(
+                            blob.get_url(evidence.media_path)
+                            if evidence.media_path
+                            else None
+                        ),
+                        timestamp_ms=evidence.timestamp_ms,
+                    )
+                )
+            return responses
 
         if answer:
-            if high_conf and llm_conf != "low":
-                # 确认：有确定答案 + 高置信证据
+            if llm_conf == "high":
                 status = QueryResultStatus.CONFIRMED
-                shown = high_conf
                 uncertainty = None
-                shown_answer = answer
             else:
-                # 可能：有答案但仅低置信证据或模型不确定
                 status = QueryResultStatus.POSSIBLE
-                shown = low_conf or top
-                uncertainty = "证据置信度不足，仅供参考"
-                shown_answer = answer
+                uncertainty = "模型对答案把握不足，仅供参考"
             result = QueryResponse(
                 query_id=query_id,
                 status=status,
-                answer=shown_answer,
-                evidences=ev_responses(shown),
-                sources=await self._sources(shown or top),
+                answer=answer,
+                evidences=ev_responses(top),
+                sources=await self._sources(selected),
                 uncertainty_reason=uncertainty,
             )
         else:
-            # 无接地答案。若存在低置信证据 → 可能；否则 → 没有找到。
-            if low_conf:
-                result = QueryResponse(
-                    query_id=query_id,
-                    status=QueryResultStatus.POSSIBLE,
-                    evidences=ev_responses(low_conf),
-                    sources=await self._sources(low_conf),
-                    uncertainty_reason="无法确认相关信息",
-                )
-            else:
-                result = QueryResponse(
-                    query_id=query_id, status=QueryResultStatus.NOT_FOUND
-                )
+            result = QueryResponse(
+                query_id=query_id,
+                status=QueryResultStatus.NOT_FOUND,
+                evidences=ev_responses(top),
+                sources=await self._sources(top),
+                uncertainty_reason="检索证据不足，无法回答",
+            )
 
         await self._log(query_id, question, scope, result)
         return result
@@ -238,7 +342,25 @@ class QueryEngine:
             if str(ev.id) in scores and scores[str(ev.id)] >= settings.reranker_min_score
         ]
         ranked.sort(key=lambda item: item[1], reverse=True)
-        return [ev for ev, _score in ranked[: settings.reranker_top_k]]
+        results: list[Evidence] = []
+        for evidence, score in ranked[: settings.reranker_top_k]:
+            results.append(
+                evidence.model_copy(
+                    update={
+                        "confidence": retrieval_confidence(
+                            score,
+                            settings.reranker_medium_score,
+                            settings.reranker_high_score,
+                        ),
+                        "metadata": {
+                            **evidence.metadata,
+                            "source_confidence": evidence.confidence.value,
+                            "retrieval_score": score,
+                        },
+                    }
+                )
+            )
+        return results
 
     async def _retrieve_visual(
         self,
@@ -277,7 +399,9 @@ class QueryEngine:
             if allowed_memory_ids is not None and item_memory_id not in allowed_memory_ids:
                 continue
             try:
-                confidence = ConfidenceLevel(str(metadata.get("confidence") or "high"))
+                source_confidence = ConfidenceLevel(
+                    str(metadata.get("confidence") or "high")
+                )
                 evidence_id = UUID(entry_id)
                 evidence_memory_id = UUID(item_memory_id)
             except (ValueError, TypeError):
@@ -290,8 +414,16 @@ class QueryEngine:
                     content=str(metadata.get("content") or "关键帧"),
                     media_path=str(metadata.get("media_path") or "") or None,
                     timestamp_ms=int(metadata.get("timestamp_ms") or 0),
-                    confidence=confidence,
-                    metadata={**metadata, "similarity_score": score},
+                    confidence=retrieval_confidence(
+                        score,
+                        settings.visual_retrieval_medium_score,
+                        settings.visual_retrieval_high_score,
+                    ),
+                    metadata={
+                        **metadata,
+                        "source_confidence": source_confidence.value,
+                        "similarity_score": score,
+                    },
                 )
             )
             if len(results) >= settings.visual_retrieval_top_k:

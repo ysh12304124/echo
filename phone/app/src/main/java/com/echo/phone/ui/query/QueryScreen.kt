@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -69,6 +70,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -103,13 +106,12 @@ class QueryViewModel(
     var submittedQuerySource by mutableStateOf<QueryInputSource?>(null)
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
+    var notice by mutableStateOf<String?>(null)
     var voicePhase by mutableStateOf(VoicePhase.IDLE)
     var recordingSeconds by mutableStateOf(0)
     var cancelTargetActive by mutableStateOf(false)
-    var voiceFeedback by mutableStateOf<String?>(null)
 
     private var recordingJob: Job? = null
-    private var feedbackJob: Job? = null
     private var finishing = false
     private var startedAtMs = 0L
 
@@ -122,6 +124,7 @@ class QueryViewModel(
         viewModelScope.launch {
             loading = true
             error = null
+            notice = null
             result = null
             try {
                 result = repo.query(query, com.echo.phone.domain.QueryScope.GLOBAL_WORK)
@@ -136,7 +139,6 @@ class QueryViewModel(
 
     fun startVoiceRecording(): Boolean {
         if (loading || voicePhase != VoicePhase.IDLE || finishing) {
-            if (voicePhase == VoicePhase.IDLE) error = "无法启动麦克风，请稍后重试"
             return false
         }
         val started = try {
@@ -150,12 +152,12 @@ class QueryViewModel(
             return false
         }
         error = null
+        notice = null
         result = null
         submittedQuery = null
         submittedQuerySource = null
         recordingSeconds = 0
         cancelTargetActive = false
-        voiceFeedback = null
         finishing = false
         startedAtMs = android.os.SystemClock.elapsedRealtime()
         voicePhase = VoicePhase.RECORDING
@@ -185,7 +187,8 @@ class QueryViewModel(
         cancelTargetActive = false
         if (cancel) {
             voicePhase = VoicePhase.IDLE
-            showVoiceFeedback("已取消录音")
+            error = null
+            notice = null
             viewModelScope.launch {
                 try {
                     recorder.cancelAndDiscard()
@@ -204,11 +207,11 @@ class QueryViewModel(
             try {
                 val audio = recorder.stop()
                 if (audio.isEmpty()) {
-                    error = "没有采集到语音"
+                    notice = "没有采集到语音，请重试"
                     return@launch
                 }
                 if (audio.size < VoiceQueryRecorder.MIN_BYTES) {
-                    error = "语音太短，请长按并说完整问题"
+                    notice = "语音太短，请长按并说完整问题"
                     return@launch
                 }
 
@@ -218,7 +221,7 @@ class QueryViewModel(
                 submittedQuery = query.ifBlank { null }
                 submittedQuerySource = if (query.isBlank()) null else QueryInputSource.VOICE_TRANSCRIPT
                 if (!transcription.asrAccepted) {
-                    error = transcription.rejectionReason ?: "没听清，请再说一次"
+                    notice = transcription.rejectionReason ?: "没听清，请再说一次"
                     return@launch
                 }
                 voicePhase = VoicePhase.SEARCHING
@@ -234,15 +237,6 @@ class QueryViewModel(
                 loading = false
                 finishing = false
             }
-        }
-    }
-
-    private fun showVoiceFeedback(message: String) {
-        feedbackJob?.cancel()
-        voiceFeedback = message
-        feedbackJob = viewModelScope.launch {
-            delay(1400)
-            if (voiceFeedback == message) voiceFeedback = null
         }
     }
 
@@ -262,7 +256,6 @@ class QueryViewModel(
 
     override fun onCleared() {
         recordingJob?.cancel()
-        feedbackJob?.cancel()
         recorder.cancel()
         super.onCleared()
     }
@@ -305,8 +298,10 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
     val density = LocalDensity.current
     val imeBottom = WindowInsets.ime.getBottom(density)
     val keyboardVisible = imeBottom > 0
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
 
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().imePadding()) {
         Column(
             Modifier
                 .fillMaxSize()
@@ -332,6 +327,7 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                     }
                 }
                 val currentError = vm.error
+                val currentNotice = vm.notice
                 val currentResult = vm.result
                 when {
                     vm.voicePhase == VoicePhase.TRANSCRIBING -> StatusView("正在转写", true)
@@ -339,6 +335,9 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                     vm.loading -> StatusView("查询中", true)
                     currentError != null -> {
                         ErrorCard(currentError)
+                    }
+                    currentNotice != null -> {
+                        NoticeCard(currentNotice)
                     }
                     currentResult != null -> {
                         QueryResultView(currentResult, app.repository::absoluteMediaUrl)
@@ -353,7 +352,6 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                 onQuestionChange = { vm.question = it },
                 enabled = !vm.loading && vm.voicePhase == VoicePhase.IDLE,
                 sendEnabled = vm.question.isNotBlank() && !vm.loading && vm.voicePhase == VoicePhase.IDLE,
-                feedback = vm.voiceFeedback,
                 compact = keyboardVisible,
                 onSend = { vm.submit() },
                 inputModifier = Modifier
@@ -368,7 +366,10 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                                     if (!change.pressed) return@withTimeoutOrNull false
                                 }
                             }
-                            if (held != null || !vm.startVoiceRecording()) return@awaitEachGesture
+                            if (held != null) return@awaitEachGesture
+                            focusManager.clearFocus(force = true)
+                            keyboardController?.hide()
+                            if (!vm.startVoiceRecording()) return@awaitEachGesture
 
                             while (vm.voicePhase == VoicePhase.RECORDING) {
                                 val event = awaitPointerEvent(PointerEventPass.Main)
@@ -395,6 +396,27 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                 cancelActive = vm.cancelTargetActive,
                 onCancelTargetPositioned = { cancelTargetCoordinates = it },
             )
+        }
+    }
+}
+
+@Composable
+private fun NoticeCard(message: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFFF3F6FA))
+            .border(1.dp, Color(0xFFD7DEE8), RoundedCornerShape(8.dp))
+            .padding(14.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(Icons.Default.Info, null, tint = Color(0xFF667085), modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text("未发送查询", color = Color(0xFF344054), fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(2.dp))
+            Text(message, color = Color(0xFF667085), style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
@@ -430,7 +452,6 @@ private fun QueryInputBar(
     onQuestionChange: (String) -> Unit,
     enabled: Boolean,
     sendEnabled: Boolean,
-    feedback: String?,
     compact: Boolean,
     onSend: () -> Unit,
     inputModifier: Modifier,
@@ -479,11 +500,10 @@ private fun QueryInputBar(
                 )
             }
         }
-        val prompt = feedback ?: "短按输入文字，长按输入框说话"
-        if (!compact || feedback != null) {
+        if (!compact) {
             Spacer(Modifier.height(6.dp))
             Text(
-                prompt,
+                "短按输入文字，长按输入框说话",
                 modifier = Modifier.align(Alignment.CenterHorizontally),
                 style = MaterialTheme.typography.labelSmall,
                 color = Color(0xFF98A2B3),

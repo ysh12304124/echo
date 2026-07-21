@@ -239,6 +239,9 @@ data class QueryEvidenceDto(
     val type: String,
     val content: String,
     val confidence: String,
+    val source_confidence: String? = null,
+    val retrieval_score: Double? = null,
+    val used_in_answer: Boolean = false,
     val media_url: String?,
     val timestamp_ms: Long,
 )
@@ -409,6 +412,11 @@ fun QueryResponseDto.toDomain() = QueryResult(
             type = EvidenceType.valueOf(it.type.uppercase()),
             content = it.content,
             confidence = ConfidenceLevel.valueOf(it.confidence.uppercase()),
+            sourceConfidence = it.source_confidence?.let { value ->
+                ConfidenceLevel.valueOf(value.uppercase())
+            },
+            retrievalScore = it.retrieval_score,
+            usedInAnswer = it.used_in_answer,
             mediaUrl = it.media_url,
             timestampMs = it.timestamp_ms,
         )

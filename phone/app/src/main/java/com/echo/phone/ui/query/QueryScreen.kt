@@ -579,7 +579,11 @@ private fun QueryResultView(
                 Spacer(Modifier.height(10.dp))
                 Text(result.answer ?: "", style = MaterialTheme.typography.bodyLarge)
                 result.evidences
-                    .filter { it.type == EvidenceType.VISUAL && it.mediaUrl != null }
+                    .filter {
+                        it.type == EvidenceType.VISUAL &&
+                            it.usedInAnswer &&
+                            it.mediaUrl != null
+                    }
                     .forEach { evidence ->
                         resolveMediaUrl(evidence.mediaUrl)?.let { imageUrl ->
                             Spacer(Modifier.height(10.dp))
@@ -639,7 +643,20 @@ private fun QueryResultView(
                                 Spacer(Modifier.width(10.dp))
                                 Column {
                                     Text(evidence.content, style = MaterialTheme.typography.bodySmall)
-                                    Text("置信: ${evidence.confidence.name}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF6B7280))
+                                    val confidenceText = when (evidence.confidence) {
+                                        com.echo.phone.domain.ConfidenceLevel.HIGH -> "高"
+                                        com.echo.phone.domain.ConfidenceLevel.MEDIUM -> "中"
+                                        com.echo.phone.domain.ConfidenceLevel.LOW -> "低"
+                                    }
+                                    val evidenceStatus = if (evidence.usedInAnswer) "已用于回答" else "候选证据"
+                                    val detail = if (evidence.retrievalScore != null) {
+                                        val scorer = if (evidence.type == EvidenceType.VISUAL) "CLIP" else "Reranker"
+                                        "相关性: $confidenceText · $scorer %.3f · $evidenceStatus"
+                                            .format(evidence.retrievalScore)
+                                    } else {
+                                        "来源置信: $confidenceText · $evidenceStatus"
+                                    }
+                                    Text(detail, style = MaterialTheme.typography.labelSmall, color = Color(0xFF6B7280))
                                 }
                             }
                         }

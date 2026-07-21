@@ -107,6 +107,9 @@ data class QueryEvidence(
     val type: EvidenceType,
     val content: String,
     val confidence: ConfidenceLevel,
+    val sourceConfidence: ConfidenceLevel? = null,
+    val retrievalScore: Double? = null,
+    val usedInAnswer: Boolean = false,
     val mediaUrl: String?,
     val timestampMs: Long,
 )

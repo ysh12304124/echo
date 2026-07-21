@@ -419,13 +419,13 @@ private fun VoiceRecordingOverlay(
     ) {
         Box(
             Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 34.dp, end = 22.dp)
-                .size(width = 120.dp, height = 64.dp)
+                .align(Alignment.BottomEnd)
+                .padding(end = 26.dp, bottom = 176.dp)
+                .size(width = 136.dp, height = 68.dp)
                 .onGloballyPositioned(onCancelTargetPositioned)
-                .clip(RoundedCornerShape(32.dp))
+                .clip(RoundedCornerShape(34.dp))
                 .background(if (cancelActive) Color(0xFFFF4D4F) else Color.White.copy(alpha = 0.18f))
-                .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(32.dp)),
+                .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(34.dp)),
             contentAlignment = Alignment.Center,
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -454,7 +454,7 @@ private fun VoiceRecordingOverlay(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .height(186.dp)
+                .height(168.dp)
                 .clip(RoundedCornerShape(topStart = 220.dp, topEnd = 220.dp))
                 .background(Color.White.copy(alpha = 0.78f)),
             contentAlignment = Alignment.Center,

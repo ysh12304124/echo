@@ -18,9 +18,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -66,6 +69,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -270,6 +274,9 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
     })
     var cancelTargetCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var inputCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val density = LocalDensity.current
+    val imeBottom = WindowInsets.ime.getBottom(density)
+    val keyboardVisible = imeBottom > 0
 
     Box(Modifier.fillMaxSize()) {
         Column(
@@ -313,15 +320,17 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                         QueryResultView(currentResult, app.repository::absoluteMediaUrl)
                     }
                 }
+                Spacer(Modifier.height(if (keyboardVisible) 12.dp else 4.dp))
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(if (keyboardVisible) 8.dp else 12.dp))
             QueryInputBar(
                 question = vm.question,
                 onQuestionChange = { vm.question = it },
                 enabled = !vm.loading && vm.voicePhase == VoicePhase.IDLE,
                 sendEnabled = vm.question.isNotBlank() && !vm.loading && vm.voicePhase == VoicePhase.IDLE,
                 feedback = vm.voiceFeedback,
+                compact = keyboardVisible,
                 onSend = { vm.submit() },
                 inputModifier = Modifier
                     .onGloballyPositioned { inputCoordinates = it }
@@ -353,6 +362,7 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                             }
                         }
                     },
+                modifier = Modifier.imePadding(),
             )
         }
 
@@ -373,10 +383,12 @@ private fun QueryInputBar(
     enabled: Boolean,
     sendEnabled: Boolean,
     feedback: String?,
+    compact: Boolean,
     onSend: () -> Unit,
     inputModifier: Modifier,
+    modifier: Modifier = Modifier,
 ) {
-    Column(Modifier.fillMaxWidth()) {
+    Column(modifier.fillMaxWidth()) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -420,13 +432,15 @@ private fun QueryInputBar(
             }
         }
         val prompt = feedback ?: "短按输入文字，长按输入框说话"
-        Spacer(Modifier.height(6.dp))
-        Text(
-            prompt,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-            style = MaterialTheme.typography.labelSmall,
-            color = Color(0xFF98A2B3),
-        )
+        if (!compact || feedback != null) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                prompt,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFF98A2B3),
+            )
+        }
     }
 }
 

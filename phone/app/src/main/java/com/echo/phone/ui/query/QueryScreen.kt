@@ -133,7 +133,16 @@ class QueryViewModel(
     }
 
     fun startVoiceRecording(): Boolean {
-        if (loading || voicePhase != VoicePhase.IDLE || !recorder.start()) {
+        if (loading || voicePhase != VoicePhase.IDLE || finishing) {
+            if (voicePhase == VoicePhase.IDLE) error = "无法启动麦克风，请稍后重试"
+            return false
+        }
+        val started = try {
+            recorder.start()
+        } catch (error: Throwable) {
+            false
+        }
+        if (!started) {
             if (voicePhase == VoicePhase.IDLE) error = "无法启动麦克风，请检查录音权限"
             return false
         }
@@ -172,10 +181,16 @@ class QueryViewModel(
         recordingJob = null
         cancelTargetActive = false
         if (cancel) {
-            recorder.cancel()
             voicePhase = VoicePhase.IDLE
-            finishing = false
             showVoiceFeedback("已取消录音")
+            viewModelScope.launch {
+                try {
+                    recorder.cancelAndDiscard()
+                } catch (_: Throwable) {
+                } finally {
+                    finishing = false
+                }
+            }
             return
         }
 

@@ -5,12 +5,18 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.echo.phone.EchoApplication
+import com.echo.phone.util.EchoLog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -87,5 +93,62 @@ fun StorageScreen(onBack: () -> Unit) {
         Spacer(Modifier.height(16.dp))
         Text("删除", style = MaterialTheme.typography.titleMedium)
         Text("删除记忆将级联清理其媒体文件与检索索引，且不可恢复。锁定的记忆需先解锁。")
+    }
+}
+
+@Composable
+fun DiagnosticsLogScreen(onBack: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    var logs by remember { mutableStateOf(EchoLog.recentLines()) }
+    val path = EchoLog.logFilePath()
+    val packageName = LocalContext.current.packageName
+    val logcatCommand = "adb logcat -s ${EchoLog.TAG}:V AndroidRuntime:E"
+    val pullCommand = "adb pull /sdcard/Android/data/$packageName/files/echo_phone.log ./echo_phone.log"
+
+    fun refresh() {
+        logs = EchoLog.recentLines()
+    }
+
+    InfoScaffold("诊断日志", onBack) {
+        Text("日志位置", style = MaterialTheme.typography.titleMedium)
+        Text(path, style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(12.dp))
+
+        Text("查看命令", style = MaterialTheme.typography.titleMedium)
+        Text("实时日志：", style = MaterialTheme.typography.labelMedium)
+        Text(logcatCommand, style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(6.dp))
+        Text("导出文件：", style = MaterialTheme.typography.labelMedium)
+        Text(pullCommand, style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(12.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { clipboard.setText(AnnotatedString("$logcatCommand\n$pullCommand")) }) {
+                Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("复制命令")
+            }
+            OutlinedButton(onClick = { refresh() }) {
+                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("刷新")
+            }
+            OutlinedButton(onClick = { EchoLog.clear(); refresh() }) {
+                Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("清空")
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Text("最近日志", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(8.dp))
+        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small) {
+            Text(
+                logs,
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }

@@ -79,6 +79,7 @@ import com.echo.phone.data.VoiceQueryRecorder
 import com.echo.phone.domain.EvidenceType
 import com.echo.phone.domain.QueryResult
 import com.echo.phone.domain.QueryResultStatus
+import com.echo.phone.util.EchoLog
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -125,6 +126,7 @@ class QueryViewModel(
             try {
                 result = repo.query(query, com.echo.phone.domain.QueryScope.GLOBAL_WORK)
             } catch (exception: Exception) {
+                EchoLog.e("文本查询失败: ${exception.message}", exception)
                 error = exception.message ?: "查询失败"
             } finally {
                 loading = false
@@ -140,6 +142,7 @@ class QueryViewModel(
         val started = try {
             recorder.start()
         } catch (error: Throwable) {
+            EchoLog.e("语音查询录音启动异常: ${error.message}", error)
             false
         }
         if (!started) {
@@ -186,7 +189,8 @@ class QueryViewModel(
             viewModelScope.launch {
                 try {
                     recorder.cancelAndDiscard()
-                } catch (_: Throwable) {
+                } catch (error: Throwable) {
+                    EchoLog.e("语音查询取消清理异常: ${error.message}", error)
                 } finally {
                     finishing = false
                 }
@@ -223,6 +227,7 @@ class QueryViewModel(
                     com.echo.phone.domain.QueryScope.GLOBAL_WORK,
                 )
             } catch (exception: Exception) {
+                EchoLog.e("语音查询失败: ${exception.message}", exception)
                 error = userFacingQueryError(exception)
             } finally {
                 voicePhase = VoicePhase.IDLE
@@ -333,14 +338,7 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                     vm.voicePhase == VoicePhase.SEARCHING -> StatusView("正在检索", true)
                     vm.loading -> StatusView("查询中", true)
                     currentError != null -> {
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFFFFF1F0))
-                                .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(10.dp))
-                                .padding(16.dp),
-                        ) { Text(currentError, color = MaterialTheme.colorScheme.error) }
+                        ErrorCard(currentError)
                     }
                     currentResult != null -> {
                         QueryResultView(currentResult, app.repository::absoluteMediaUrl)
@@ -397,6 +395,31 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                 cancelActive = vm.cancelTargetActive,
                 onCancelTargetPositioned = { cancelTargetCoordinates = it },
             )
+        }
+    }
+}
+
+@Composable
+private fun ErrorCard(message: String) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .shadow(3.dp, RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFFFFF1F0))
+            .border(1.dp, Color(0xFFEF4444), RoundedCornerShape(10.dp))
+            .padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.Top) {
+            Icon(Icons.Default.Warning, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text("操作失败", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(4.dp))
+                Text(message, color = Color(0xFF991B1B), style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(6.dp))
+                Text("详细日志可在 我的 > 诊断日志 查看", color = Color(0xFF7F1D1D), style = MaterialTheme.typography.labelSmall)
+            }
         }
     }
 }

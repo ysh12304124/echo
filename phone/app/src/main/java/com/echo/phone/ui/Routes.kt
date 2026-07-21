@@ -13,6 +13,7 @@ object Routes {
     const val DEVICE = "device"
     const val STORAGE = "storage"
     const val HELP = "help"
+    const val DIAGNOSTICS = "diagnostics"
     const val FAVORITES = "favorites"
 
     fun memoryDetail(id: String) = "memory/$id"

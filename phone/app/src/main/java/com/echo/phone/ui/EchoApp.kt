@@ -23,6 +23,7 @@ import com.echo.phone.domain.DataPartition
 import com.echo.phone.ui.home.HomeScreen
 import com.echo.phone.ui.memory.MemoryDetailScreen
 import com.echo.phone.ui.mine.DeviceScreen
+import com.echo.phone.ui.mine.DiagnosticsLogScreen
 import com.echo.phone.ui.mine.HelpScreen
 import com.echo.phone.ui.mine.MineScreen
 import com.echo.phone.ui.mine.StorageScreen
@@ -106,6 +107,7 @@ fun EchoApp() {
                     onNavigateDevice = { navController.navigate(Routes.DEVICE) },
                     onNavigateStorage = { navController.navigate(Routes.STORAGE) },
                     onNavigateHelp = { navController.navigate(Routes.HELP) },
+                    onNavigateDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
                     onNavigateFavorites = { navController.navigate(Routes.FAVORITES) },
                 )
             }
@@ -124,6 +126,7 @@ fun EchoApp() {
             composable(Routes.DEVICE) { DeviceScreen(onBack = { navController.popBackStack() }) }
             composable(Routes.STORAGE) { StorageScreen(onBack = { navController.popBackStack() }) }
             composable(Routes.HELP) { HelpScreen(onBack = { navController.popBackStack() }) }
+            composable(Routes.DIAGNOSTICS) { DiagnosticsLogScreen(onBack = { navController.popBackStack() }) }
             composable(Routes.QUALITY_TIME) {
                 HomeScreen(partitionFilter = DataPartition.QUALITY_TIME, title = "Quality Time", onNavigateMemory = { id -> navController.navigate(Routes.memoryDetail(id)) }, onNavigateSpace = { id -> navController.navigate(Routes.spaceDetail(id)) })
             }

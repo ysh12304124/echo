@@ -22,8 +22,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -32,7 +32,6 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notes
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Warning
@@ -41,8 +40,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -272,7 +269,7 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
         override fun <T : ViewModel> create(cls: Class<T>): T = QueryViewModel(app.repository) as T
     })
     var cancelTargetCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    var micCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var inputCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
     Box(Modifier.fillMaxSize()) {
         Column(
@@ -282,27 +279,6 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                 .padding(top = 20.dp, bottom = 16.dp),
         ) {
             Text("查询", style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.height(14.dp))
-
-            OutlinedTextField(
-                value = vm.question,
-                onValueChange = { vm.question = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(if (vm.question.isNotEmpty()) 2.dp else 0.dp, RoundedCornerShape(10.dp)),
-                placeholder = { Text("例如：张经理承诺了什么？") },
-                leadingIcon = { Icon(Icons.Default.Search, null) },
-                trailingIcon = {
-                    if (vm.question.isNotBlank()) {
-                        IconButton(onClick = { vm.submit() }, enabled = !vm.loading) {
-                            Icon(Icons.Default.Send, "查询")
-                        }
-                    }
-                },
-                singleLine = true,
-                shape = MaterialTheme.shapes.small,
-                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary),
-            )
 
             Column(
                 Modifier
@@ -339,61 +315,45 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                 }
             }
 
-            Spacer(Modifier.height(10.dp))
-            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        Modifier
-                            .size(72.dp)
-                            .onGloballyPositioned { micCoordinates = it }
-                            .clip(CircleShape)
-                            .background(if (vm.voicePhase == VoicePhase.RECORDING) Color(0xFF1D4ED8) else MaterialTheme.colorScheme.primary)
-                            .pointerInput(Unit) {
-                                awaitEachGesture {
-                                    awaitFirstDown(requireUnconsumed = false)
-                                    val held = withTimeoutOrNull(LONG_PRESS_MS) {
-                                        while (true) {
-                                            val event = awaitPointerEvent(PointerEventPass.Main)
-                                            val change = event.changes.firstOrNull() ?: continue
-                                            if (!change.pressed) return@withTimeoutOrNull false
-                                        }
-                                    }
-                                    if (held != null || !vm.startVoiceRecording()) return@awaitEachGesture
-
-                                    while (vm.voicePhase == VoicePhase.RECORDING) {
-                                        val event = awaitPointerEvent(PointerEventPass.Main)
-                                        val change = event.changes.firstOrNull() ?: continue
-                                        val rootPosition = micCoordinates?.positionInRoot()?.plus(change.position)
-                                        val inTarget = rootPosition != null &&
-                                            cancelTargetCoordinates?.boundsInRoot()?.contains(rootPosition) == true
-                                        vm.updateCancelTarget(inTarget)
-                                        if (change.changedToUpIgnoreConsumed() || !change.pressed) {
-                                            vm.finishVoiceRecording(inTarget)
-                                            change.consume()
-                                            break
-                                        }
-                                        change.consume()
-                                    }
+            Spacer(Modifier.height(12.dp))
+            QueryInputBar(
+                question = vm.question,
+                onQuestionChange = { vm.question = it },
+                enabled = !vm.loading && vm.voicePhase == VoicePhase.IDLE,
+                sendEnabled = vm.question.isNotBlank() && !vm.loading && vm.voicePhase == VoicePhase.IDLE,
+                feedback = vm.voiceFeedback,
+                onSend = { vm.submit() },
+                inputModifier = Modifier
+                    .onGloballyPositioned { inputCoordinates = it }
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            val held = withTimeoutOrNull(LONG_PRESS_MS) {
+                                while (true) {
+                                    val event = awaitPointerEvent(PointerEventPass.Main)
+                                    val change = event.changes.firstOrNull() ?: continue
+                                    if (!change.pressed) return@withTimeoutOrNull false
                                 }
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Default.Mic,
-                            contentDescription = "长按语音查询",
-                            tint = Color.White,
-                            modifier = Modifier.size(32.dp),
-                        )
-                    }
-                }
-                val prompt = vm.voiceFeedback ?: "长按说话"
-                Spacer(Modifier.height(8.dp))
-                Text(prompt, style = MaterialTheme.typography.labelMedium, color = Color(0xFF667085))
-            }
+                            }
+                            if (held != null || !vm.startVoiceRecording()) return@awaitEachGesture
+
+                            while (vm.voicePhase == VoicePhase.RECORDING) {
+                                val event = awaitPointerEvent(PointerEventPass.Main)
+                                val change = event.changes.firstOrNull() ?: continue
+                                val rootPosition = inputCoordinates?.positionInRoot()?.plus(change.position)
+                                val inTarget = rootPosition != null &&
+                                    cancelTargetCoordinates?.boundsInRoot()?.contains(rootPosition) == true
+                                vm.updateCancelTarget(inTarget)
+                                if (change.changedToUpIgnoreConsumed() || !change.pressed) {
+                                    vm.finishVoiceRecording(inTarget)
+                                    change.consume()
+                                    break
+                                }
+                                change.consume()
+                            }
+                        }
+                    },
+            )
         }
 
         if (vm.voicePhase == VoicePhase.RECORDING) {
@@ -403,6 +363,70 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                 onCancelTargetPositioned = { cancelTargetCoordinates = it },
             )
         }
+    }
+}
+
+@Composable
+private fun QueryInputBar(
+    question: String,
+    onQuestionChange: (String) -> Unit,
+    enabled: Boolean,
+    sendEnabled: Boolean,
+    feedback: String?,
+    onSend: () -> Unit,
+    inputModifier: Modifier,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(58.dp)
+                .shadow(5.dp, RoundedCornerShape(29.dp))
+                .clip(RoundedCornerShape(29.dp))
+                .background(Color.White)
+                .border(1.dp, Color(0xFFE4E7EC), RoundedCornerShape(29.dp))
+                .padding(start = 18.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                inputModifier
+                    .weight(1f)
+                    .height(48.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                BasicTextField(
+                    value = question,
+                    onValueChange = onQuestionChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = enabled,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color(0xFF111827)),
+                )
+                if (question.isBlank()) {
+                    Text(
+                        "输入问题，或长按说话...",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Color(0xFF98A2B3),
+                    )
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            IconButton(onClick = onSend, enabled = sendEnabled) {
+                Icon(
+                    Icons.Default.Send,
+                    contentDescription = "发送查询",
+                    tint = if (sendEnabled) MaterialTheme.colorScheme.primary else Color(0xFF98A2B3),
+                )
+            }
+        }
+        val prompt = feedback ?: "短按输入文字，长按输入框说话"
+        Spacer(Modifier.height(6.dp))
+        Text(
+            prompt,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+            style = MaterialTheme.typography.labelSmall,
+            color = Color(0xFF98A2B3),
+        )
     }
 }
 

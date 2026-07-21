@@ -23,8 +23,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -261,7 +263,7 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
         Modifier
             .fillMaxSize()
             .padding(horizontal = 20.dp)
-            .padding(top = 20.dp),
+            .padding(top = 20.dp, bottom = 16.dp),
     ) {
         Text("查询", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(14.dp))
@@ -285,118 +287,127 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
             shape = MaterialTheme.shapes.small,
             colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary),
         )
-        Spacer(Modifier.height(12.dp))
 
-        AnimatedVisibility(visible = vm.voicePhase == VoicePhase.RECORDING) {
-            Box(Modifier.fillMaxWidth().height(84.dp), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Spacer(Modifier.height(16.dp))
+            vm.transcript?.let { transcript ->
+                if (vm.voicePhase != VoicePhase.RECORDING) {
+                    TranscriptPreview(transcript)
+                    Spacer(Modifier.height(12.dp))
+                }
+            }
+            AnimatedContent(
+                targetState = when {
+                    vm.voicePhase == VoicePhase.TRANSCRIBING -> "transcribing"
+                    vm.voicePhase == VoicePhase.SEARCHING -> "searching"
+                    vm.loading -> "loading"
+                    vm.error != null -> "error"
+                    vm.result != null -> "result"
+                    else -> "idle"
+                },
+                transitionSpec = { fadeIn(tween(250)) + slideInVertically(tween(250)) { it / 4 } togetherWith fadeOut(tween(150)) },
+                label = "query-result",
+            ) { state ->
+                when (state) {
+                    "transcribing" -> StatusView("正在转写", true)
+                    "searching" -> StatusView("正在检索", true)
+                    "loading" -> StatusView("查询中", true)
+                    "error" -> Column {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFFFFF1F0))
+                                .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(10.dp))
+                                .padding(16.dp),
+                        ) { Text(vm.error ?: "查询失败", color = MaterialTheme.colorScheme.error) }
+                    }
+                    "result" -> {
+                        QueryResultView(vm.result!!, app.repository::absoluteMediaUrl)
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            AnimatedVisibility(visible = vm.voicePhase == VoicePhase.RECORDING) {
+                Box(Modifier.fillMaxWidth().height(84.dp), contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier
+                            .size(68.dp)
+                            .onGloballyPositioned { cancelTargetCoordinates = it }
+                            .clip(CircleShape)
+                            .background(if (vm.cancelTargetActive) Color(0xFFD92D20) else Color(0xFFFFE4E1))
+                            .border(2.dp, Color(0xFFD92D20), CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "取消录音",
+                            tint = if (vm.cancelTargetActive) Color.White else Color(0xFFD92D20),
+                            modifier = Modifier.size(30.dp),
+                        )
+                    }
+                }
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Box(
                     Modifier
-                        .size(68.dp)
-                        .onGloballyPositioned { cancelTargetCoordinates = it }
+                        .size(72.dp)
+                        .onGloballyPositioned { micCoordinates = it }
                         .clip(CircleShape)
-                        .background(if (vm.cancelTargetActive) Color(0xFFD92D20) else Color(0xFFFFE4E1))
-                        .border(2.dp, Color(0xFFD92D20), CircleShape),
+                        .background(if (vm.voicePhase == VoicePhase.RECORDING) Color(0xFF1D4ED8) else MaterialTheme.colorScheme.primary)
+                        .pointerInput(vm.voicePhase) {
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                val held = withTimeoutOrNull(LONG_PRESS_MS) {
+                                    while (true) {
+                                        val event = awaitPointerEvent(PointerEventPass.Main)
+                                        val change = event.changes.firstOrNull() ?: continue
+                                        if (!change.pressed) return@withTimeoutOrNull false
+                                    }
+                                }
+                                if (held != null || !vm.startVoiceRecording()) return@awaitEachGesture
+
+                                while (vm.voicePhase == VoicePhase.RECORDING) {
+                                    val event = awaitPointerEvent(PointerEventPass.Main)
+                                    val change = event.changes.firstOrNull() ?: continue
+                                    val rootPosition = micCoordinates?.positionInRoot()?.plus(change.position)
+                                    val inTarget = rootPosition != null &&
+                                        cancelTargetCoordinates?.boundsInRoot()?.contains(rootPosition) == true
+                                    vm.updateCancelTarget(inTarget)
+                                    if (change.changedToUpIgnoreConsumed()) {
+                                        vm.finishVoiceRecording(inTarget)
+                                        change.consume()
+                                        break
+                                    }
+                                    change.consume()
+                                }
+                            }
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        Icons.Default.Close,
-                        contentDescription = "取消录音",
-                        tint = if (vm.cancelTargetActive) Color.White else Color(0xFFD92D20),
-                        modifier = Modifier.size(30.dp),
+                        Icons.Default.Mic,
+                        contentDescription = "长按语音查询",
+                        tint = Color.White,
+                        modifier = Modifier.size(32.dp),
                     )
                 }
-            }
-        }
-
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier
-                    .size(64.dp)
-                    .onGloballyPositioned { micCoordinates = it }
-                    .clip(CircleShape)
-                    .background(if (vm.voicePhase == VoicePhase.RECORDING) Color(0xFF1D4ED8) else MaterialTheme.colorScheme.primary)
-                    .pointerInput(vm.voicePhase) {
-                        awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false)
-                            val held = withTimeoutOrNull(LONG_PRESS_MS) {
-                                while (true) {
-                                    val event = awaitPointerEvent(PointerEventPass.Main)
-                                    val change = event.changes.firstOrNull() ?: continue
-                                    if (!change.pressed) return@withTimeoutOrNull false
-                                }
-                            }
-                            if (held != null || !vm.startVoiceRecording()) return@awaitEachGesture
-
-                            while (vm.voicePhase == VoicePhase.RECORDING) {
-                                val event = awaitPointerEvent(PointerEventPass.Main)
-                                val change = event.changes.firstOrNull() ?: continue
-                                val rootPosition = micCoordinates?.positionInRoot()?.plus(change.position)
-                                val inTarget = rootPosition != null &&
-                                    cancelTargetCoordinates?.boundsInRoot()?.contains(rootPosition) == true
-                                vm.updateCancelTarget(inTarget)
-                                if (change.changedToUpIgnoreConsumed()) {
-                                    vm.finishVoiceRecording(inTarget)
-                                    change.consume()
-                                    break
-                                }
-                                change.consume()
-                            }
-                        }
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Default.Mic,
-                    contentDescription = "长按语音查询",
-                    tint = Color.White,
-                    modifier = Modifier.size(30.dp),
-                )
-            }
-            if (vm.voicePhase == VoicePhase.RECORDING) {
-                Spacer(Modifier.width(12.dp))
-                Text("00:${vm.recordingSeconds.toString().padStart(2, '0')}", style = MaterialTheme.typography.titleMedium)
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-        vm.transcript?.let { transcript ->
-            if (vm.voicePhase != VoicePhase.RECORDING) {
-                TranscriptPreview(transcript)
-                Spacer(Modifier.height(12.dp))
-            }
-        }
-        AnimatedContent(
-            targetState = when {
-                vm.voicePhase == VoicePhase.TRANSCRIBING -> "transcribing"
-                vm.voicePhase == VoicePhase.SEARCHING -> "searching"
-                vm.loading -> "loading"
-                vm.error != null -> "error"
-                vm.result != null -> "result"
-                else -> "idle"
-            },
-            transitionSpec = { fadeIn(tween(250)) + slideInVertically(tween(250)) { it / 4 } togetherWith fadeOut(tween(150)) },
-            label = "query-result",
-        ) { state ->
-            when (state) {
-                "transcribing" -> StatusView("正在转写", true)
-                "searching" -> StatusView("正在检索", true)
-                "loading" -> StatusView("查询中", true)
-                "error" -> Column {
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFFFFF1F0))
-                            .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(10.dp))
-                            .padding(16.dp),
-                    ) { Text(vm.error ?: "查询失败", color = MaterialTheme.colorScheme.error) }
-                }
-                "result" -> {
-                    QueryResultView(vm.result!!, app.repository::absoluteMediaUrl)
+                if (vm.voicePhase == VoicePhase.RECORDING) {
+                    Spacer(Modifier.width(12.dp))
+                    Text("00:${vm.recordingSeconds.toString().padStart(2, '0')}", style = MaterialTheme.typography.titleMedium)
                 }
             }
         }

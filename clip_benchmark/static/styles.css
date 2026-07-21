@@ -29,7 +29,7 @@ h1 { font-size: 22px; line-height: 1.3; }
 .app-header p { margin-top: 5px; color: #b9c6cc; font-size: 13px; }
 
 .state-badge {
-  min-width: 72px;
+  min-width: 118px;
   padding: 7px 10px;
   border: 1px solid #64747c;
   border-radius: 6px;

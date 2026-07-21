@@ -20,9 +20,20 @@ const elements = {
 };
 
 let currentState = "not_loaded";
-let quantizationDirty = false;
+let runningQuantization = null;
+let quantizationOptionsKey = "";
 let pendingQuantization = null;
 let toastTimer;
+
+const quantizationLabels = {
+  fp16: "FP16",
+  int8: "INT8",
+  nf4: "NF4 4-bit",
+};
+
+function quantizationLabel(value) {
+  return quantizationLabels[value] || value?.toUpperCase() || "--";
+}
 
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes <= 0) return "--";
@@ -45,10 +56,38 @@ function setBusy(busy) {
   elements.reloadButton.disabled = busy || ["loading_model", "indexing_images"].includes(currentState);
 }
 
+function updateQuantizationOptions(status) {
+  const options = (status.quantization_options || []).filter(
+    (value) => value !== status.quantization,
+  );
+  const nextKey = `${status.quantization || ""}:${options.join(",")}`;
+  if (nextKey === quantizationOptionsKey) return;
+
+  const previousSelection = elements.quantization.value;
+  const previousRunning = runningQuantization;
+  const preferred = options.includes(previousSelection)
+    ? previousSelection
+    : options.includes(previousRunning)
+      ? previousRunning
+      : options[0];
+
+  elements.quantization.replaceChildren(
+    ...options.map((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = quantizationLabel(value);
+      return option;
+    }),
+  );
+  if (preferred) elements.quantization.value = preferred;
+  runningQuantization = status.quantization;
+  quantizationOptionsKey = nextKey;
+}
+
 function renderStatus(status) {
   currentState = status.state;
   const stateLabels = {
-    ready: "就绪",
+    ready: `${quantizationLabel(status.quantization)} 就绪`,
     loading_model: "加载模型",
     indexing_images: "构建索引",
     error: "错误",
@@ -56,17 +95,15 @@ function renderStatus(status) {
   };
   elements.stateBadge.textContent = stateLabels[status.state] || status.state;
   elements.stateBadge.className = `state-badge ${status.state === "ready" ? "ready" : status.state === "error" ? "error" : "busy"}`;
-  elements.modelSummary.textContent = `${status.quantization?.toUpperCase() || "--"} · ${status.embedding_dimension} 维 · ${status.image_count} 张图片`;
+  elements.modelSummary.textContent = `${status.embedding_dimension} 维 · ${status.image_count} 张图片`;
+  updateQuantizationOptions(status);
   if (
     pendingQuantization &&
     status.state === "ready" &&
     status.quantization === pendingQuantization
   ) {
+    elements.emptyState.textContent = "输入查询文本后开始检索";
     pendingQuantization = null;
-    quantizationDirty = false;
-  }
-  if (status.quantization && !quantizationDirty && !pendingQuantization) {
-    elements.quantization.value = status.quantization;
   }
 
   const gpu = status.gpu || {};
@@ -160,14 +197,10 @@ elements.form.addEventListener("submit", async (event) => {
   }
 });
 
-elements.quantization.addEventListener("change", () => {
-  quantizationDirty = true;
-});
-
 elements.reloadButton.addEventListener("click", async () => {
   const quantization = elements.quantization.value;
+  if (!quantization) return;
   pendingQuantization = quantization;
-  quantizationDirty = true;
   setBusy(true);
   elements.resultsGrid.replaceChildren();
   elements.emptyState.hidden = false;
@@ -179,7 +212,7 @@ elements.reloadButton.addEventListener("click", async () => {
       body: JSON.stringify({ quantization }),
     });
     currentState = "loading_model";
-    notify(`已开始切换到 ${quantization.toUpperCase()}`);
+    notify(`已开始切换到 ${quantizationLabel(quantization)}`);
   } catch (error) {
     pendingQuantization = null;
     notify(error.message, true);

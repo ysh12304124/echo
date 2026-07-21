@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,9 +54,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
@@ -270,168 +274,229 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
     var cancelTargetCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var micCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(horizontal = 20.dp)
-            .padding(top = 20.dp, bottom = 16.dp),
-    ) {
-        Text("查询", style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(14.dp))
-
-        OutlinedTextField(
-            value = vm.question,
-            onValueChange = { vm.question = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .shadow(if (vm.question.isNotEmpty()) 2.dp else 0.dp, RoundedCornerShape(10.dp)),
-            placeholder = { Text("例如：张经理承诺了什么？") },
-            leadingIcon = { Icon(Icons.Default.Search, null) },
-            trailingIcon = {
-                if (vm.question.isNotBlank()) {
-                    IconButton(onClick = { vm.submit() }, enabled = !vm.loading) {
-                        Icon(Icons.Default.Send, "查询")
-                    }
-                }
-            },
-            singleLine = true,
-            shape = MaterialTheme.shapes.small,
-            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary),
-        )
-
+    Box(Modifier.fillMaxSize()) {
         Column(
             Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
+                .fillMaxSize()
+                .padding(horizontal = 20.dp)
+                .padding(top = 20.dp, bottom = 16.dp),
         ) {
-            Spacer(Modifier.height(16.dp))
-            vm.transcript?.let { transcript ->
-                if (vm.voicePhase != VoicePhase.RECORDING) {
-                    TranscriptPreview(transcript)
-                    Spacer(Modifier.height(12.dp))
+            Text("查询", style = MaterialTheme.typography.headlineMedium)
+            Spacer(Modifier.height(14.dp))
+
+            OutlinedTextField(
+                value = vm.question,
+                onValueChange = { vm.question = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(if (vm.question.isNotEmpty()) 2.dp else 0.dp, RoundedCornerShape(10.dp)),
+                placeholder = { Text("例如：张经理承诺了什么？") },
+                leadingIcon = { Icon(Icons.Default.Search, null) },
+                trailingIcon = {
+                    if (vm.question.isNotBlank()) {
+                        IconButton(onClick = { vm.submit() }, enabled = !vm.loading) {
+                            Icon(Icons.Default.Send, "查询")
+                        }
+                    }
+                },
+                singleLine = true,
+                shape = MaterialTheme.shapes.small,
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary),
+            )
+
+            Column(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Spacer(Modifier.height(16.dp))
+                vm.transcript?.let { transcript ->
+                    if (vm.voicePhase != VoicePhase.RECORDING) {
+                        TranscriptPreview(transcript)
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+                val currentError = vm.error
+                val currentResult = vm.result
+                when {
+                    vm.voicePhase == VoicePhase.TRANSCRIBING -> StatusView("正在转写", true)
+                    vm.voicePhase == VoicePhase.SEARCHING -> StatusView("正在检索", true)
+                    vm.loading -> StatusView("查询中", true)
+                    currentError != null -> {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFFFFF1F0))
+                                .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(10.dp))
+                                .padding(16.dp),
+                        ) { Text(currentError, color = MaterialTheme.colorScheme.error) }
+                    }
+                    currentResult != null -> {
+                        QueryResultView(currentResult, app.repository::absoluteMediaUrl)
+                    }
                 }
             }
-            val currentError = vm.error
-            val currentResult = vm.result
-            when {
-                vm.voicePhase == VoicePhase.TRANSCRIBING -> StatusView("正在转写", true)
-                vm.voicePhase == VoicePhase.SEARCHING -> StatusView("正在检索", true)
-                vm.loading -> StatusView("查询中", true)
-                currentError != null -> {
+
+            Spacer(Modifier.height(10.dp))
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Box(
                         Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFFFFF1F0))
-                            .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(10.dp))
-                            .padding(16.dp),
-                    ) { Text(currentError, color = MaterialTheme.colorScheme.error) }
+                            .size(72.dp)
+                            .onGloballyPositioned { micCoordinates = it }
+                            .clip(CircleShape)
+                            .background(if (vm.voicePhase == VoicePhase.RECORDING) Color(0xFF1D4ED8) else MaterialTheme.colorScheme.primary)
+                            .pointerInput(Unit) {
+                                awaitEachGesture {
+                                    awaitFirstDown(requireUnconsumed = false)
+                                    val held = withTimeoutOrNull(LONG_PRESS_MS) {
+                                        while (true) {
+                                            val event = awaitPointerEvent(PointerEventPass.Main)
+                                            val change = event.changes.firstOrNull() ?: continue
+                                            if (!change.pressed) return@withTimeoutOrNull false
+                                        }
+                                    }
+                                    if (held != null || !vm.startVoiceRecording()) return@awaitEachGesture
+
+                                    while (vm.voicePhase == VoicePhase.RECORDING) {
+                                        val event = awaitPointerEvent(PointerEventPass.Main)
+                                        val change = event.changes.firstOrNull() ?: continue
+                                        val rootPosition = micCoordinates?.positionInRoot()?.plus(change.position)
+                                        val inTarget = rootPosition != null &&
+                                            cancelTargetCoordinates?.boundsInRoot()?.contains(rootPosition) == true
+                                        vm.updateCancelTarget(inTarget)
+                                        if (change.changedToUpIgnoreConsumed() || !change.pressed) {
+                                            vm.finishVoiceRecording(inTarget)
+                                            change.consume()
+                                            break
+                                        }
+                                        change.consume()
+                                    }
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.Mic,
+                            contentDescription = "长按语音查询",
+                            tint = Color.White,
+                            modifier = Modifier.size(32.dp),
+                        )
+                    }
                 }
-                currentResult != null -> {
-                    QueryResultView(currentResult, app.repository::absoluteMediaUrl)
-                }
+                val prompt = vm.voiceFeedback ?: "长按说话"
+                Spacer(Modifier.height(8.dp))
+                Text(prompt, style = MaterialTheme.typography.labelMedium, color = Color(0xFF667085))
             }
         }
 
-        Spacer(Modifier.height(10.dp))
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            AnimatedVisibility(visible = vm.voicePhase == VoicePhase.RECORDING) {
-                Box(Modifier.fillMaxWidth().height(104.dp), contentAlignment = Alignment.Center) {
-                    Box(
-                        Modifier
-                            .size(88.dp)
-                            .onGloballyPositioned { cancelTargetCoordinates = it }
-                            .clip(CircleShape)
-                            .background(if (vm.cancelTargetActive) Color(0xFFD92D20) else Color(0xFFFFE4E1))
-                            .border(2.dp, Color(0xFFD92D20), CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "取消录音",
-                                tint = if (vm.cancelTargetActive) Color.White else Color(0xFFD92D20),
-                                modifier = Modifier.size(30.dp),
-                            )
-                            Text(
-                                if (vm.cancelTargetActive) "松开取消" else "移入取消",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (vm.cancelTargetActive) Color.White else Color(0xFFD92D20),
-                            )
-                        }
-                    }
-                }
-            }
+        if (vm.voicePhase == VoicePhase.RECORDING) {
+            VoiceRecordingOverlay(
+                seconds = vm.recordingSeconds,
+                cancelActive = vm.cancelTargetActive,
+                onCancelTargetPositioned = { cancelTargetCoordinates = it },
+            )
+        }
+    }
+}
 
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    Modifier
-                        .size(72.dp)
-                        .onGloballyPositioned { micCoordinates = it }
-                        .clip(CircleShape)
-                        .background(if (vm.voicePhase == VoicePhase.RECORDING) Color(0xFF1D4ED8) else MaterialTheme.colorScheme.primary)
-                        .pointerInput(Unit) {
-                            awaitEachGesture {
-                                awaitFirstDown(requireUnconsumed = false)
-                                val held = withTimeoutOrNull(LONG_PRESS_MS) {
-                                    while (true) {
-                                        val event = awaitPointerEvent(PointerEventPass.Main)
-                                        val change = event.changes.firstOrNull() ?: continue
-                                        if (!change.pressed) return@withTimeoutOrNull false
-                                    }
-                                }
-                                if (held != null || !vm.startVoiceRecording()) return@awaitEachGesture
+@Composable
+private fun VoiceRecordingOverlay(
+    seconds: Int,
+    cancelActive: Boolean,
+    onCancelTargetPositioned: (LayoutCoordinates) -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.68f)),
+    ) {
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 34.dp, end = 22.dp)
+                .size(width = 120.dp, height = 64.dp)
+                .onGloballyPositioned(onCancelTargetPositioned)
+                .clip(RoundedCornerShape(32.dp))
+                .background(if (cancelActive) Color(0xFFFF4D4F) else Color.White.copy(alpha = 0.18f))
+                .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(32.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Close, contentDescription = "取消录音", tint = Color.White, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(if (cancelActive) "松手取消" else "取消", color = Color.White, style = MaterialTheme.typography.labelLarge)
+            }
+        }
 
-                                while (vm.voicePhase == VoicePhase.RECORDING) {
-                                    val event = awaitPointerEvent(PointerEventPass.Main)
-                                    val change = event.changes.firstOrNull() ?: continue
-                                    val rootPosition = micCoordinates?.positionInRoot()?.plus(change.position)
-                                    val inTarget = rootPosition != null &&
-                                        cancelTargetCoordinates?.boundsInRoot()?.contains(rootPosition) == true
-                                    vm.updateCancelTarget(inTarget)
-                                    if (change.changedToUpIgnoreConsumed() || !change.pressed) {
-                                        vm.finishVoiceRecording(inTarget)
-                                        change.consume()
-                                        break
-                                    }
-                                    change.consume()
-                                }
-                            }
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Default.Mic,
-                        contentDescription = "长按语音查询",
-                        tint = Color.White,
-                        modifier = Modifier.size(32.dp),
-                    )
-                }
-                if (vm.voicePhase == VoicePhase.RECORDING) {
-                    Spacer(Modifier.width(12.dp))
-                    Text("00:${vm.recordingSeconds.toString().padStart(2, '0')}", style = MaterialTheme.typography.titleMedium)
-                }
-            }
-            val prompt = when {
-                vm.voicePhase == VoicePhase.RECORDING && vm.cancelTargetActive -> "松开后取消"
-                vm.voicePhase == VoicePhase.RECORDING -> "松开完成，上滑到红色区域取消"
-                vm.voiceFeedback != null -> vm.voiceFeedback
-                else -> "长按说话"
-            }
-            Spacer(Modifier.height(8.dp))
+        Column(
+            Modifier
+                .align(Alignment.Center)
+                .padding(bottom = 96.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            VoiceWaveBubble(cancelActive = cancelActive)
+            Spacer(Modifier.height(12.dp))
             Text(
-                prompt ?: "",
-                style = MaterialTheme.typography.labelMedium,
-                color = when {
-                    vm.voicePhase == VoicePhase.RECORDING && vm.cancelTargetActive -> Color(0xFFD92D20)
-                    vm.voiceFeedback != null -> Color(0xFF667085)
-                    else -> Color(0xFF667085)
-                },
+                "00:${seconds.toString().padStart(2, '0')}",
+                color = Color.White.copy(alpha = 0.86f),
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+
+        Box(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(186.dp)
+                .clip(RoundedCornerShape(topStart = 220.dp, topEnd = 220.dp))
+                .background(Color.White.copy(alpha = 0.78f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                if (cancelActive) "移出取消区可发送" else "松开 发送",
+                color = Color(0xFF111827),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun VoiceWaveBubble(cancelActive: Boolean) {
+    val bubbleColor = if (cancelActive) Color(0xFFFF4D4F) else Color(0xFF91EF67)
+    Canvas(Modifier.size(width = 232.dp, height = 110.dp)) {
+        val bubbleHeight = size.height - 22f
+        drawRoundRect(
+            color = bubbleColor,
+            size = androidx.compose.ui.geometry.Size(size.width, bubbleHeight),
+            cornerRadius = CornerRadius(30f, 30f),
+        )
+        val tail = Path().apply {
+            moveTo(size.width / 2f - 18f, bubbleHeight - 1f)
+            lineTo(size.width / 2f, size.height)
+            lineTo(size.width / 2f + 18f, bubbleHeight - 1f)
+            close()
+        }
+        drawPath(tail, bubbleColor)
+
+        val bars = listOf(9f, 12f, 8f, 14f, 22f, 34f, 17f, 13f, 28f, 12f, 9f)
+        val centerY = bubbleHeight / 2f
+        val startX = size.width / 2f - (bars.size - 1) * 5f
+        bars.forEachIndexed { index, height ->
+            val x = startX + index * 10f
+            drawLine(
+                color = Color(0xFF425466),
+                start = Offset(x, centerY - height / 2f),
+                end = Offset(x, centerY + height / 2f),
+                strokeWidth = 4f,
             )
         }
     }

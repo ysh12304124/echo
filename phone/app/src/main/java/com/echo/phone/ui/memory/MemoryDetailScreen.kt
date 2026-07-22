@@ -142,9 +142,6 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
     }
 
     Scaffold(
-        modifier = Modifier
-            .imePadding()
-            .padding(bottom = if (keyboardVisible) 12.dp else 0.dp),
         contentWindowInsets = if (keyboardVisible) {
             WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
         } else {
@@ -169,16 +166,6 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
                 },
             )
         },
-        bottomBar = {
-            if (!vm.loading && vm.memory != null) {
-                MemoryQueryInputRow(
-                    question = vm.queryQuestion,
-                    onQuestionChange = { vm.queryQuestion = it },
-                    onSubmit = submitMemoryQuery,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-            }
-        },
     ) { padding ->
         if (vm.loading) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
@@ -193,7 +180,9 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
+                .padding(padding)
+                .imePadding()
+                .padding(bottom = if (keyboardVisible) 12.dp else 0.dp),
             contentPadding = PaddingValues(
                 start = 16.dp,
                 top = 16.dp,
@@ -306,6 +295,16 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
                         }
                     }
                 }
+            }
+
+            // 在当前记忆中查询
+            item {
+                MemoryQueryInputRow(
+                    question = vm.queryQuestion,
+                    onQuestionChange = { vm.queryQuestion = it },
+                    onSubmit = submitMemoryQuery,
+                    modifier = Modifier.padding(top = 16.dp),
+                )
             }
 
             // 查询结果

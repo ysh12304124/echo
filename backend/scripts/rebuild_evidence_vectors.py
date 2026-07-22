@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import math
-import sqlite3
+import shutil
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,13 +25,12 @@ class RebuildResult:
     backup_path: Path | None = None
 
 
-def backup_vector_database(db_path: Path) -> Path | None:
-    if not db_path.exists():
+def backup_vector_store_path(path: Path) -> Path | None:
+    if not path.exists():
         return None
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    backup_path = db_path.with_name(f"{db_path.name}.bak.{timestamp}")
-    with sqlite3.connect(db_path) as source, sqlite3.connect(backup_path) as target:
-        source.backup(target)
+    backup_path = path.with_name(f"{path.name}.bak.{timestamp}")
+    shutil.copytree(path, backup_path)
     return backup_path
 
 
@@ -74,6 +73,7 @@ async def rebuild(dry_run: bool = False) -> RebuildResult:
                             "memory_id": str(evidence.memory_id),
                             "partition": memory.partition.value,
                             "type": evidence.type.value,
+                            "content": content,
                         },
                     )
                 )
@@ -81,7 +81,7 @@ async def rebuild(dry_run: bool = False) -> RebuildResult:
     backup_path = None
     if not dry_run:
         assert vector_store is not None
-        backup_path = backup_vector_database(Path(settings.vector_db_path).resolve())
+        backup_path = backup_vector_store_path(Path(settings.lance_db_path).resolve())
         await vector_store.replace_all(entries)
         info = await vector_store.index_info()
         if (

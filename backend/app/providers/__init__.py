@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     blob_storage_path: str = "./data/blobs"
     provider_mode: str = "mock"  # mock | local
     database_url: str = "sqlite+aiosqlite:///./data/echo.db"
-    vector_db_path: str = "./data/vectors.db"
+    lance_db_path: str = "./data/lancedb"
 
     # 本地 OpenAI 兼容服务配置（provider_mode=local 时生效）
     llm_base_url: str = "http://localhost:8001/v1"
@@ -130,12 +130,14 @@ class ProviderFactory:
     def vector_store(self) -> VectorStore:
         if self._vector_store is None:
             if self._is_local:
-                from app.providers.sqlite_vector import SqliteVectorStore
+                from app.providers.lance_vector import LanceDBVectorStore
 
-                self._vector_store = SqliteVectorStore(
-                    self.settings.vector_db_path,
+                self._vector_store = LanceDBVectorStore(
+                    self.settings.lance_db_path,
                     self.settings.embedding_model,
                     self.settings.embedding_dimension,
+                    namespace="text",
+                    enable_fts=True,
                 )
             else:
                 self._vector_store = InMemoryVectorStore()
@@ -158,11 +160,11 @@ class ProviderFactory:
     def visual_vector_store(self) -> VectorStore:
         if self._visual_vector_store is None:
             if self._is_local:
-                from app.providers.sqlite_vector import SqliteVectorStore
-
                 s = self.settings
-                self._visual_vector_store = SqliteVectorStore(
-                    s.vector_db_path,
+                from app.providers.lance_vector import LanceDBVectorStore
+
+                self._visual_vector_store = LanceDBVectorStore(
+                    s.lance_db_path,
                     s.visual_embedding_model,
                     s.visual_embedding_dimension,
                     namespace="visual",

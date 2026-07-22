@@ -166,6 +166,21 @@ class InMemoryVectorStore(VectorStore):
     results.sort(key=lambda x: x[1], reverse=True)
     return results[:top_k]
 
+  async def fts_search(
+    self, query: str, top_k: int = 10, filter: Optional[dict] = None
+  ) -> list[tuple[str, float, dict]]:
+    query_terms = set(query)
+    results = []
+    for id, (_vector, meta) in self._store.items():
+      if filter and not all(meta.get(k) == val for k, val in filter.items()):
+        continue
+      content = str(meta.get("content") or "")
+      score = float(sum(1 for term in query_terms if term in content))
+      if score > 0:
+        results.append((id, score, meta))
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results[:top_k]
+
   async def delete(self, id: str) -> None:
     self._store.pop(id, None)
 

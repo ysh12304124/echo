@@ -11,7 +11,7 @@ from app.providers import get_provider_factory, get_settings
 from app.repositories.database import async_session_factory
 from app.repositories.memory_repo import MemoryRepository
 from app.services.keyframe_index import build_keyframe_entries
-from scripts.rebuild_evidence_vectors import backup_vector_database
+from scripts.rebuild_evidence_vectors import backup_vector_store_path
 
 
 async def rebuild(dry_run: bool = False) -> tuple[int, int, Path | None]:
@@ -24,7 +24,7 @@ async def rebuild(dry_run: bool = False) -> tuple[int, int, Path | None]:
         return count, 0, None
 
     entries, skipped = await build_keyframe_entries(memories, providers)
-    backup = backup_vector_database(Path(settings.vector_db_path).resolve())
+    backup = backup_vector_store_path(Path(settings.lance_db_path).resolve())
     store = providers.visual_vector_store()
     await store.replace_all(entries)
     info = await store.index_info()

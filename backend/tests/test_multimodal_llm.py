@@ -39,3 +39,5 @@ async def test_multimodal_llm_embeds_local_images_as_data_urls(tmp_path):
     assert "可能包含与问题无关的内容" in client.messages[0]["content"]
     assert "禁止拿近邻对象替代回答" in client.messages[0]["content"]
     assert "used_evidence_refs" in client.messages[0]["content"]
+    assert "7241" not in client.messages[0]["content"]
+    assert "7421" not in client.messages[0]["content"]

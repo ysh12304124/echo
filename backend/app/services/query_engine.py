@@ -19,8 +19,20 @@ from app.schemas import (
     QueryResponse,
     QuerySourceResponse,
 )
-from app.services.bm25 import BM25Document, BM25Index, normalize_scores
 from app.services.keyframe_index import keyframe_blob_key
+
+
+def normalize_scores(scores: dict[str, float]) -> dict[str, float]:
+    if not scores:
+        return {}
+    minimum = min(scores.values())
+    maximum = max(scores.values())
+    if abs(maximum - minimum) <= 1e-12:
+        return {key: 1.0 for key in scores}
+    return {
+        key: (value - minimum) / (maximum - minimum)
+        for key, value in scores.items()
+    }
 
 
 @dataclass(frozen=True)
@@ -37,6 +49,30 @@ def retrieval_confidence(
     if score >= medium_score:
         return ConfidenceLevel.MEDIUM
     return ConfidenceLevel.LOW
+
+
+COLOR_TERMS = (
+    "黑色",
+    "灰色",
+    "白色",
+    "红色",
+    "黄色",
+    "蓝色",
+    "绿色",
+    "紫色",
+    "青色",
+    "橙色",
+)
+
+
+def requested_colors(question: str) -> set[str]:
+    return {color for color in COLOR_TERMS if color in question}
+
+
+def matches_requested_colors(content: str, colors: set[str]) -> bool:
+    if not colors:
+        return True
+    return any(color in content for color in colors)
 
 
 class QueryEngine:
@@ -68,6 +104,8 @@ class QueryEngine:
 
         # 真实 RAG：问题向量化 → 按 scope 检索 → 证据接地问答。
         retrieved = await self._retrieve(question, scope, memory_id, space_id)
+        if scope != QueryScope.MEMORY:
+            retrieved = self._apply_visual_constraints(question, retrieved)
         if not retrieved.text and not retrieved.visual:
             result = QueryResponse(query_id=query_id, status=QueryResultStatus.NOT_FOUND)
             await self._log(query_id, question, scope, result)
@@ -268,6 +306,27 @@ class QueryEngine:
         await self._log(query_id, question, scope, result)
         return result
 
+    def _apply_visual_constraints(
+        self, question: str, retrieved: RetrievedEvidence
+    ) -> RetrievedEvidence:
+        colors = requested_colors(question)
+        if not colors:
+            return retrieved
+        visual = [
+            evidence
+            for evidence in retrieved.visual
+            if matches_requested_colors(evidence.content, colors)
+        ]
+        if not visual:
+            return RetrievedEvidence(text=retrieved.text, visual=visual)
+        visual_memory_ids = {evidence.memory_id for evidence in visual}
+        text = [
+            evidence
+            for evidence in retrieved.text
+            if evidence.memory_id in visual_memory_ids
+        ]
+        return RetrievedEvidence(text=text, visual=visual)
+
     async def _retrieve(
         self,
         question: str,
@@ -353,12 +412,15 @@ class QueryEngine:
         }
 
         if settings.hybrid_retrieval_enabled:
-            bm25 = BM25Index(
-                [BM25Document(str(ev.id), ev.content) for ev in scoped_evidences],
-                k1=settings.bm25_k1,
-                b=settings.bm25_b,
-            )
-            bm25_scores = dict(bm25.search(question, settings.reranker_candidates))
+            bm25_scores = {
+                ev_id: score
+                for ev_id, score, _metadata in await vector_store.fts_search(
+                    question,
+                    top_k=settings.reranker_candidates,
+                    filter=filt,
+                )
+                if ev_id in scoped_by_id
+            }
             vector_norm = normalize_scores(vector_scores)
             bm25_norm = normalize_scores(bm25_scores)
             fused_scores = {

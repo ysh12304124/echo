@@ -130,6 +130,12 @@ class VectorStore(ABC):
     ) -> list[tuple[str, float, dict]]:
         pass
 
+    async def fts_search(
+        self, query: str, top_k: int = 10, filter: Optional[dict] = None
+    ) -> list[tuple[str, float, dict]]:
+        """Return BM25/FTS scores when the store has a full-text index."""
+        raise NotImplementedError
+
     @abstractmethod
     async def delete(self, id: str) -> None:
         pass

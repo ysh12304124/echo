@@ -274,7 +274,12 @@ async def apply_audio_result(
         await vector_store.upsert(
             str(ev.id),
             emb.vector,
-            {"memory_id": str(memory_id), "partition": memory.partition.value, "type": "transcript"},
+            {
+                "memory_id": str(memory_id),
+                "partition": memory.partition.value,
+                "type": "transcript",
+                "content": transcript,
+            },
         )
 
     await repo.update_time_memory(

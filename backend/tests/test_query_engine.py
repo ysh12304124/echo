@@ -61,6 +61,15 @@ class RankedEvidenceQueryEngine(QueryEngine):
         return RetrievedEvidence(text=[self.evidence], visual=[])
 
 
+class FixedRetrievedQueryEngine(QueryEngine):
+    def __init__(self, repo, providers, retrieved):
+        super().__init__(repo, providers)
+        self.retrieved = retrieved
+
+    async def _retrieve(self, _question, _scope, _memory_id, _space_id):
+        return self.retrieved
+
+
 @pytest.mark.asyncio
 async def test_query_with_ranked_evidence_uses_configured_top_k():
     memory = TimeMemory(
@@ -325,6 +334,92 @@ async def test_query_excludes_missing_visual_media():
 
     assert result.status == QueryResultStatus.NOT_FOUND
     assert result.evidences == []
+
+
+@pytest.mark.asyncio
+async def test_query_uses_visual_color_constraint_to_drop_conflicting_candidates(tmp_path):
+    gray_path = tmp_path / "gray.png"
+    black_path = tmp_path / "black.png"
+    gray_path.write_bytes(b"gray")
+    black_path.write_bytes(b"black")
+    gray_memory = TimeMemory(
+        title="灰色设备箱",
+        scene=TimeScene.ONSITE,
+        partition=DataPartition.WORK,
+        status=MemoryStatus.COMPLETED,
+    )
+    black_memory = TimeMemory(
+        title="黑色设备箱",
+        scene=TimeScene.ONSITE,
+        partition=DataPartition.WORK,
+        status=MemoryStatus.COMPLETED,
+    )
+    gray_text = Evidence(
+        id=uuid4(),
+        memory_id=gray_memory.id,
+        type=EvidenceType.TRANSCRIPT,
+        content="另一只设备箱的记录是7241，存放位置改为B-08货架第三层。",
+        metadata={"retrieval_score": 0.9, "source_confidence": "high"},
+    )
+    black_text = Evidence(
+        id=uuid4(),
+        memory_id=black_memory.id,
+        type=EvidenceType.TRANSCRIPT,
+        content="仓库这次先盘点到7421号设备箱，位置在B-03货架第二层。",
+        metadata={"retrieval_score": 0.99, "source_confidence": "high"},
+    )
+    gray_visual = Evidence(
+        id=uuid4(),
+        memory_id=gray_memory.id,
+        type=EvidenceType.VISUAL,
+        content="灰色硬壳设备箱，资产贴纸显示 7241。",
+        media_path=str(gray_path),
+        metadata={"similarity_score": 0.48, "source_confidence": "high"},
+    )
+    black_visual = Evidence(
+        id=uuid4(),
+        memory_id=black_memory.id,
+        type=EvidenceType.VISUAL,
+        content="黑色硬壳设备箱，资产贴纸显示 7421。",
+        media_path=str(black_path),
+        metadata={"similarity_score": 0.46, "source_confidence": "high"},
+    )
+    repo = StubRepository(gray_memory)
+
+    class CapturingLLM(StubLLM):
+        def __init__(self):
+            self.context = ""
+            self.images = []
+
+        async def answer_query_multimodal(self, question, evidence_context, images):
+            self.context = evidence_context
+            self.images = images
+            return {
+                "answer": "7241",
+                "confidence": "high",
+                "evidence_sufficient": True,
+                "used_evidence_refs": ["文本1", "图片1"],
+            }
+
+    llm = CapturingLLM()
+    providers = SimpleNamespace(
+        llm=lambda: llm,
+        blob_store=lambda: StubBlobStore(),
+    )
+    engine = FixedRetrievedQueryEngine(
+        repo,
+        providers,
+        RetrievedEvidence(text=[black_text, gray_text], visual=[gray_visual, black_visual]),
+    )
+
+    result = await engine.query("灰色设备箱编号", QueryScope.GLOBAL_WORK)
+
+    assert result.status == QueryResultStatus.CONFIRMED
+    assert result.answer == "7241"
+    assert "7241" in llm.context
+    assert "7421" not in llm.context
+    assert len(llm.images) == 1
+    assert "灰色硬壳设备箱" in llm.images[0].caption
 
 
 def _visual_result(evidence):

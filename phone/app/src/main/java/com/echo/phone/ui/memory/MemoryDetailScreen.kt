@@ -54,6 +54,7 @@ class MemoryDetailViewModel(
     var bindings by mutableStateOf<List<TimeSpaceBinding>>(emptyList())
     var queryQuestion by mutableStateOf("")
     var queryResult by mutableStateOf<QueryResult?>(null)
+    var queryLoading by mutableStateOf(false)
     var loading by mutableStateOf(true)
     var isFavorited by mutableStateOf(false)
     var isLocked by mutableStateOf(false)
@@ -109,12 +110,21 @@ class MemoryDetailViewModel(
     }
 
     fun queryInMemory(preset: String? = null) {
-        val q = preset ?: queryQuestion
-        if (preset != null) queryQuestion = preset
-        if (q.isBlank()) return
+        val q = (preset ?: queryQuestion).trim()
+        if (q.isBlank() || queryLoading) return
+        if (preset != null) queryQuestion = q
+        queryLoading = true
+        queryResult = null
+        error = null
         viewModelScope.launch {
-            try { queryResult = repo.query(q, QueryScope.MEMORY, memoryId) }
-            catch (e: Exception) { error = e.message }
+            try {
+                queryResult = repo.query(q, QueryScope.MEMORY, memoryId)
+                queryQuestion = ""
+            } catch (e: Exception) {
+                error = e.message
+            } finally {
+                queryLoading = false
+            }
         }
     }
 }
@@ -270,7 +280,15 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
                 if (questions.isNotEmpty()) {
                     item {
                         DetailSection("可问问题") {
-                            Column { questions.forEach { q -> SuggestionChip(onClick = { vm.queryInMemory(q) }, label = { Text(q) }) } }
+                            Column {
+                                questions.forEach { q ->
+                                    SuggestionChip(
+                                        onClick = { vm.queryInMemory(q) },
+                                        label = { Text(q) },
+                                        enabled = !vm.queryLoading,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -303,6 +321,7 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
                     question = vm.queryQuestion,
                     onQuestionChange = { vm.queryQuestion = it },
                     onSubmit = submitMemoryQuery,
+                    loading = vm.queryLoading,
                     modifier = Modifier.padding(top = 16.dp),
                 )
             }
@@ -360,6 +379,7 @@ private fun MemoryQueryInputRow(
     question: String,
     onQuestionChange: (String) -> Unit,
     onSubmit: () -> Unit,
+    loading: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -371,6 +391,7 @@ private fun MemoryQueryInputRow(
             value = question,
             onValueChange = onQuestionChange,
             modifier = Modifier.weight(1f),
+            enabled = !loading,
             placeholder = { Text("在此记忆中查询…") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             singleLine = true,
@@ -383,7 +404,7 @@ private fun MemoryQueryInputRow(
                 .height(48.dp)
                 .clip(RoundedCornerShape(24.dp))
                 .clickable(
-                    enabled = question.isNotBlank(),
+                    enabled = question.isNotBlank() && !loading,
                     role = Role.Button,
                     onClick = onSubmit,
                 ),
@@ -395,19 +416,27 @@ private fun MemoryQueryInputRow(
                     .height(36.dp)
                     .clip(RoundedCornerShape(18.dp))
                     .background(
-                        if (question.isNotBlank()) MaterialTheme.colorScheme.primary
+                        if (question.isNotBlank() || loading) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
                     ),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    Icons.Default.ArrowUpward,
-                    contentDescription = "发送查询",
-                    tint = MaterialTheme.colorScheme.onPrimary.copy(
-                        alpha = if (question.isNotBlank()) 1f else 0.72f,
-                    ),
-                    modifier = Modifier.size(19.dp),
-                )
+                if (loading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.ArrowUpward,
+                        contentDescription = "发送查询",
+                        tint = MaterialTheme.colorScheme.onPrimary.copy(
+                            alpha = if (question.isNotBlank()) 1f else 0.72f,
+                        ),
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
             }
         }
     }

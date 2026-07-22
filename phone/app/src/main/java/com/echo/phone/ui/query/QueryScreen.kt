@@ -56,6 +56,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -64,7 +65,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -161,6 +161,7 @@ class QueryViewModel(
         finishing = false
         startedAtMs = android.os.SystemClock.elapsedRealtime()
         voicePhase = VoicePhase.RECORDING
+        EchoLog.i("语音查询开始录音")
         recordingJob?.cancel()
         recordingJob = viewModelScope.launch {
             while (voicePhase == VoicePhase.RECORDING) {
@@ -189,6 +190,7 @@ class QueryViewModel(
             voicePhase = VoicePhase.IDLE
             error = null
             notice = null
+            EchoLog.i("语音查询取消录音")
             viewModelScope.launch {
                 try {
                     recorder.cancelAndDiscard()
@@ -203,6 +205,7 @@ class QueryViewModel(
 
         voicePhase = VoicePhase.TRANSCRIBING
         loading = true
+        EchoLog.i("语音查询结束录音，开始转写")
         viewModelScope.launch {
             try {
                 val audio = recorder.stop()
@@ -217,6 +220,10 @@ class QueryViewModel(
 
                 val transcription = repo.transcribeVoice(audio)
                 val query = transcription.transcript.trim()
+                EchoLog.i(
+                    "语音查询转写完成 durationMs=${transcription.durationMs} " +
+                        "accepted=${transcription.asrAccepted} avgLogprob=${transcription.asrAvgLogprob}",
+                )
                 question = ""
                 submittedQuery = query.ifBlank { null }
                 submittedQuerySource = if (query.isBlank()) null else QueryInputSource.VOICE_TRANSCRIPT
@@ -225,6 +232,7 @@ class QueryViewModel(
                     return@launch
                 }
                 voicePhase = VoicePhase.SEARCHING
+                EchoLog.i("语音查询开始检索 transcriptLength=${query.length}")
                 result = repo.query(
                     query,
                     com.echo.phone.domain.QueryScope.GLOBAL_WORK,
@@ -293,8 +301,8 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(cls: Class<T>): T = QueryViewModel(app.repository) as T
     })
-    var cancelTargetCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    var inputCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var cancelTargetBounds by remember { mutableStateOf<Rect?>(null) }
+    var inputOriginInRoot by remember { mutableStateOf<Offset?>(null) }
     val density = LocalDensity.current
     val imeBottom = WindowInsets.ime.getBottom(density)
     val keyboardVisible = imeBottom > 0
@@ -359,7 +367,9 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                 sendEnabled = vm.question.isNotBlank() && !vm.loading && vm.voicePhase == VoicePhase.IDLE,
                 onSend = { vm.submit() },
                 inputModifier = Modifier
-                    .onGloballyPositioned { inputCoordinates = it }
+                    .onGloballyPositioned { coordinates ->
+                        if (coordinates.isAttached) inputOriginInRoot = coordinates.positionInRoot()
+                    }
                     .pointerInput(Unit) {
                         awaitEachGesture {
                             awaitFirstDown(requireUnconsumed = false)
@@ -373,14 +383,15 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                             if (held != null) return@awaitEachGesture
                             focusManager.clearFocus(force = true)
                             keyboardController?.hide()
+                            cancelTargetBounds = null
                             if (!vm.startVoiceRecording()) return@awaitEachGesture
 
                             while (vm.voicePhase == VoicePhase.RECORDING) {
                                 val event = awaitPointerEvent(PointerEventPass.Main)
                                 val change = event.changes.firstOrNull() ?: continue
-                                val rootPosition = inputCoordinates?.positionInRoot()?.plus(change.position)
+                                val rootPosition = inputOriginInRoot?.plus(change.position)
                                 val inTarget = rootPosition != null &&
-                                    cancelTargetCoordinates?.boundsInRoot()?.contains(rootPosition) == true
+                                    cancelTargetBounds?.contains(rootPosition) == true
                                 vm.updateCancelTarget(inTarget)
                                 if (change.changedToUpIgnoreConsumed() || !change.pressed) {
                                     vm.finishVoiceRecording(inTarget)
@@ -398,7 +409,7 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
             VoiceRecordingOverlay(
                 seconds = vm.recordingSeconds,
                 cancelActive = vm.cancelTargetActive,
-                onCancelTargetPositioned = { cancelTargetCoordinates = it },
+                onCancelTargetPositioned = { cancelTargetBounds = it },
             )
         }
     }
@@ -510,7 +521,7 @@ private fun QueryInputBar(
 private fun VoiceRecordingOverlay(
     seconds: Int,
     cancelActive: Boolean,
-    onCancelTargetPositioned: (LayoutCoordinates) -> Unit,
+    onCancelTargetPositioned: (Rect) -> Unit,
 ) {
     Box(
         Modifier
@@ -522,7 +533,11 @@ private fun VoiceRecordingOverlay(
                 .align(Alignment.BottomEnd)
                 .padding(end = 26.dp, bottom = 176.dp)
                 .size(width = 136.dp, height = 68.dp)
-                .onGloballyPositioned(onCancelTargetPositioned)
+                .onGloballyPositioned { coordinates ->
+                    if (coordinates.isAttached) {
+                        onCancelTargetPositioned(coordinates.boundsInRoot())
+                    }
+                }
                 .clip(RoundedCornerShape(34.dp))
                 .background(if (cancelActive) Color(0xFFFF4D4F) else Color.White.copy(alpha = 0.18f))
                 .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(34.dp)),

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from app.domain.enums import (
     ConfidenceLevel,
@@ -20,6 +20,7 @@ from app.schemas import (
     QuerySourceResponse,
 )
 from app.services.bm25 import BM25Document, BM25Index, normalize_scores
+from app.services.keyframe_index import keyframe_blob_key
 
 
 @dataclass(frozen=True)
@@ -73,7 +74,11 @@ class QueryEngine:
             return result
 
         settings = getattr(self.providers, "settings", get_settings())
-        text_top = retrieved.text[: settings.reranker_top_k]
+        text_top = (
+            retrieved.text
+            if scope == QueryScope.MEMORY
+            else retrieved.text[: settings.reranker_top_k]
+        )
         blob = self.providers.blob_store()
         evidence_refs: dict[UUID, str] = {
             evidence.id: f"文本{index}"
@@ -81,7 +86,12 @@ class QueryEngine:
         }
         visual_top: list[Evidence] = []
         images: list[ImageInput] = []
-        for evidence in retrieved.visual[: settings.visual_retrieval_top_k]:
+        visual_candidates = (
+            retrieved.visual
+            if scope == QueryScope.MEMORY
+            else retrieved.visual[: settings.visual_retrieval_top_k]
+        )
+        for evidence in visual_candidates:
             if not evidence.media_path:
                 continue
             path = await blob.get_path(evidence.media_path)
@@ -265,11 +275,55 @@ class QueryEngine:
         memory_id: UUID | None,
         space_id: UUID | None,
     ) -> RetrievedEvidence:
+        if scope == QueryScope.MEMORY and memory_id:
+            return await self._retrieve_memory(memory_id)
         scoped_evidences = await self._scoped_evidences(scope, memory_id, space_id)
         text = await self._retrieve_text(question, scope, scoped_evidences)
         visual = await self._retrieve_visual(
             question, scope, memory_id, space_id
         )
+        return RetrievedEvidence(text=text, visual=visual)
+
+    async def _retrieve_memory(self, memory_id: UUID) -> RetrievedEvidence:
+        memory = await self.repo.get_time_memory(memory_id)
+        if not memory:
+            return RetrievedEvidence(text=[], visual=[])
+
+        text = [
+            evidence
+            for evidence in await self.repo.list_evidences(memory_id)
+            if evidence.type != EvidenceType.VISUAL
+        ]
+        visual: list[Evidence] = []
+        for index, frame in enumerate(memory.key_frames):
+            raw_path = str(frame.get("media_path") or frame.get("media_url") or "")
+            media_path = keyframe_blob_key(raw_path)
+            if not media_path:
+                continue
+            confidence_raw = str(frame.get("confidence") or "high")
+            try:
+                source_confidence = ConfidenceLevel(confidence_raw)
+            except ValueError:
+                source_confidence = ConfidenceLevel.HIGH
+            visual.append(
+                Evidence(
+                    id=uuid5(
+                        NAMESPACE_URL,
+                        f"echo:keyframe:{memory.id}:{media_path}",
+                    ),
+                    memory_id=memory.id,
+                    type=EvidenceType.VISUAL,
+                    content=str(
+                        frame.get("description")
+                        or frame.get("label")
+                        or f"关键帧 {index + 1}"
+                    ),
+                    media_path=media_path,
+                    timestamp_ms=int(frame.get("timestamp_ms") or 0),
+                    confidence=source_confidence,
+                    metadata={"source_confidence": source_confidence.value},
+                )
+            )
         return RetrievedEvidence(text=text, visual=visual)
 
     async def _retrieve_text(

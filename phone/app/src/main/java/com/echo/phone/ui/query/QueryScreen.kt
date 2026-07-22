@@ -301,7 +301,12 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    Box(Modifier.fillMaxSize().imePadding()) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .imePadding()
+            .padding(bottom = if (keyboardVisible) 12.dp else 0.dp),
+    ) {
         Column(
             Modifier
                 .fillMaxSize()
@@ -346,7 +351,7 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                 Spacer(Modifier.height(if (keyboardVisible) 0.dp else 4.dp))
             }
 
-            Spacer(Modifier.height(if (keyboardVisible) 8.dp else 12.dp))
+            Spacer(Modifier.height(if (keyboardVisible) 0.dp else 12.dp))
             QueryInputBar(
                 question = vm.question,
                 onQuestionChange = { vm.question = it },

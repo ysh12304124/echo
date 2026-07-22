@@ -13,6 +13,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,17 +30,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notes
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -506,11 +509,25 @@ private fun QueryInputBar(
                 }
             }
             Spacer(Modifier.width(8.dp))
-            IconButton(onClick = onSend, enabled = sendEnabled) {
+            Button(
+                onClick = onSend,
+                enabled = sendEnabled,
+                modifier = Modifier
+                    .width(72.dp)
+                    .height(42.dp),
+                shape = RoundedCornerShape(21.dp),
+                contentPadding = PaddingValues(0.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
+                    disabledContentColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.72f),
+                ),
+            ) {
                 Icon(
-                    Icons.Default.Send,
+                    Icons.Default.ArrowUpward,
                     contentDescription = "发送查询",
-                    tint = if (sendEnabled) MaterialTheme.colorScheme.primary else Color(0xFF98A2B3),
+                    modifier = Modifier.size(21.dp),
                 )
             }
         }

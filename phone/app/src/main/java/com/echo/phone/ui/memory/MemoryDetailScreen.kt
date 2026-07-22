@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -28,7 +29,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -124,6 +130,14 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
         }
     )
     var showDeleteDialog by remember { mutableStateOf(false) }
+    val density = LocalDensity.current
+    val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
+    val focusManager = LocalFocusManager.current
+
+    val submitMemoryQuery = {
+        vm.queryInMemory()
+        focusManager.clearFocus()
+    }
 
     Scaffold(
         topBar = {
@@ -156,7 +170,19 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
         val memory = vm.memory ?: return@Scaffold
         val nav = memory.navigationSummary
 
-        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .imePadding()
+                .padding(bottom = if (keyboardVisible) 12.dp else 0.dp),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                top = 16.dp,
+                end = 16.dp,
+                bottom = 16.dp,
+            ),
+        ) {
             // 基本信息
             item {
                 Text("${memory.scene.name} · ${memory.partition.name} · ${memory.durationSeconds}s",
@@ -267,17 +293,42 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
             // 在当前记忆中查询
             item {
                 Spacer(Modifier.height(16.dp))
-                OutlinedTextField(
-                    value = vm.queryQuestion,
-                    onValueChange = { vm.queryQuestion = it },
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("在此记忆中查询…") },
-                    leadingIcon = { Icon(Icons.Default.Search, null) },
-                    singleLine = true,
-                )
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = { vm.queryInMemory() }, modifier = Modifier.fillMaxWidth()) {
-                    Text("查询")
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedTextField(
+                        value = vm.queryQuestion,
+                        onValueChange = { vm.queryQuestion = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("在此记忆中查询…") },
+                        leadingIcon = { Icon(Icons.Default.Search, null) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { submitMemoryQuery() }),
+                    )
+                    Button(
+                        onClick = submitMemoryQuery,
+                        enabled = vm.queryQuestion.isNotBlank(),
+                        modifier = Modifier
+                            .width(72.dp)
+                            .height(42.dp),
+                        shape = RoundedCornerShape(21.dp),
+                        contentPadding = PaddingValues(0.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
+                            disabledContentColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.72f),
+                        ),
+                    ) {
+                        Icon(
+                            Icons.Default.ArrowUpward,
+                            contentDescription = "发送查询",
+                            modifier = Modifier.size(21.dp),
+                        )
+                    }
                 }
             }
 

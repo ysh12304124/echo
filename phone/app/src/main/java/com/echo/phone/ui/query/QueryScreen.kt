@@ -306,7 +306,7 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
             Modifier
                 .fillMaxSize()
                 .padding(horizontal = 20.dp)
-                .padding(top = 20.dp, bottom = 16.dp),
+                .padding(top = 20.dp, bottom = if (keyboardVisible) 0.dp else 16.dp),
         ) {
             Text("查询", style = MaterialTheme.typography.headlineMedium)
 
@@ -343,16 +343,15 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
                         QueryResultView(currentResult, app.repository::absoluteMediaUrl)
                     }
                 }
-                Spacer(Modifier.height(if (keyboardVisible) 12.dp else 4.dp))
+                Spacer(Modifier.height(if (keyboardVisible) 0.dp else 4.dp))
             }
 
-            Spacer(Modifier.height(if (keyboardVisible) 8.dp else 12.dp))
+            Spacer(Modifier.height(if (keyboardVisible) 0.dp else 12.dp))
             QueryInputBar(
                 question = vm.question,
                 onQuestionChange = { vm.question = it },
                 enabled = !vm.loading && vm.voicePhase == VoicePhase.IDLE,
                 sendEnabled = vm.question.isNotBlank() && !vm.loading && vm.voicePhase == VoicePhase.IDLE,
-                compact = keyboardVisible,
                 onSend = { vm.submit() },
                 inputModifier = Modifier
                     .onGloballyPositioned { inputCoordinates = it }
@@ -452,7 +451,6 @@ private fun QueryInputBar(
     onQuestionChange: (String) -> Unit,
     enabled: Boolean,
     sendEnabled: Boolean,
-    compact: Boolean,
     onSend: () -> Unit,
     inputModifier: Modifier,
     modifier: Modifier = Modifier,
@@ -499,15 +497,6 @@ private fun QueryInputBar(
                     tint = if (sendEnabled) MaterialTheme.colorScheme.primary else Color(0xFF98A2B3),
                 )
             }
-        }
-        if (!compact) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "短按输入文字，长按输入框说话",
-                modifier = Modifier.align(Alignment.CenterHorizontally),
-                style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFF98A2B3),
-            )
         }
     }
 }

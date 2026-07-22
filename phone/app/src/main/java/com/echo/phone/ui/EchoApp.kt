@@ -3,8 +3,11 @@ package com.echo.phone.ui
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
@@ -53,6 +56,11 @@ fun EchoApp() {
     val currentRoute = navBackStackEntry?.destination?.route
     val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val showBottomBar = currentRoute in tabs.map { it.route } && !keyboardVisible
+    val contentInsets = if (keyboardVisible) {
+        WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+    } else {
+        ScaffoldDefaults.contentWindowInsets
+    }
     val startDestination = if (PermissionManager.allGranted(context)) Routes.HOME else Routes.ONBOARDING
 
     // 启动页 → 主界面
@@ -63,6 +71,7 @@ fun EchoApp() {
     }
 
     Scaffold(
+        contentWindowInsets = contentInsets,
         bottomBar = {
             if (showBottomBar) {
                 NavigationBar {

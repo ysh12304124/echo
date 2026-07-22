@@ -2,6 +2,7 @@ package com.echo.phone.ui.memory
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,14 +21,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -65,9 +65,6 @@ import com.echo.phone.data.EchoRepository
 import com.echo.phone.domain.ConversationHighlight
 import com.echo.phone.domain.EmotionalTone
 import com.echo.phone.domain.Participant
-import com.echo.phone.domain.QueryResult
-import com.echo.phone.domain.QueryResultStatus
-import com.echo.phone.domain.QueryScope
 import com.echo.phone.domain.TimeMemoryDetail
 import com.echo.phone.domain.TimeSpaceBinding
 import com.echo.phone.domain.TranscriptSegment
@@ -83,8 +80,6 @@ class MemoryDetailViewModel(
 ) : ViewModel() {
     var memory by mutableStateOf<TimeMemoryDetail?>(null)
     var bindings by mutableStateOf<List<TimeSpaceBinding>>(emptyList())
-    var queryQuestion by mutableStateOf("")
-    var queryResult by mutableStateOf<QueryResult?>(null)
     var loading by mutableStateOf(true)
     var isFavorited by mutableStateOf(false)
     var isLocked by mutableStateOf(false)
@@ -113,9 +108,46 @@ class MemoryDetailViewModel(
     fun transcriptParticipant(segment: TranscriptSegment): Participant? =
         speakerOverrides[segment.segmentId] ?: segment.participant
 
-    /** 先让用户立即看到归属结果；服务端启用写回路由后再持久化该选择。 */
+    /** 先本地更新，后端接口可用时将选择持久化。 */
     fun assignSpeaker(segmentId: String, participant: Participant) {
         speakerOverrides = speakerOverrides + (segmentId to participant)
+        viewModelScope.launch {
+            try {
+                repo.updateTranscriptSpeaker(memoryId, segmentId, participant)
+            } catch (e: Exception) {
+                error = "说话人同步失败: ${e.message}"
+            }
+        }
+    }
+
+    fun renameParticipant(participant: Participant, newName: String) {
+        val name = newName.trim()
+        if (name.isBlank() || name == participant.name) return
+        fun samePerson(candidate: Participant?): Boolean = candidate != null &&
+            (candidate.participantId == participant.participantId ||
+                (participant.personId != null && candidate.personId == participant.personId))
+        fun renamed(candidate: Participant?): Participant? =
+            if (samePerson(candidate)) candidate?.copy(name = name) else candidate
+
+        memory = memory?.let { current ->
+            current.copy(
+                participants = current.participants.map { renamed(it) ?: it },
+                conversationHighlights = current.conversationHighlights.map {
+                    it.copy(participant = renamed(it.participant))
+                },
+                transcriptSegments = current.transcriptSegments.map {
+                    it.copy(participant = renamed(it.participant))
+                },
+            )
+        }
+        speakerOverrides = speakerOverrides.mapValues { (_, selected) -> renamed(selected) ?: selected }
+        viewModelScope.launch {
+            try {
+                repo.renameMemoryParticipant(memoryId, participant, name)
+            } catch (e: Exception) {
+                error = "名称同步失败: ${e.message}"
+            }
+        }
     }
 
     fun toggleFavorite() {
@@ -173,18 +205,6 @@ class MemoryDetailViewModel(
         }
     }
 
-    fun queryInMemory(preset: String? = null) {
-        val question = preset ?: queryQuestion
-        if (preset != null) queryQuestion = preset
-        if (question.isBlank()) return
-        viewModelScope.launch {
-            try {
-                queryResult = repo.query(question, QueryScope.MEMORY, memoryId)
-            } catch (e: Exception) {
-                error = e.message
-            }
-        }
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -201,6 +221,8 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
     )
     var showDeleteDialog by remember { mutableStateOf(false) }
     var pendingSpeakerSegment by remember { mutableStateOf<TranscriptSegment?>(null) }
+    var showNameManager by remember { mutableStateOf(false) }
+    var participantToRename by remember { mutableStateOf<Participant?>(null) }
 
     Scaffold(
         topBar = {
@@ -231,7 +253,7 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
 
         val memory = viewModel.memory ?: return@Scaffold
         val presentation = memory.toPresentation()
-        val participants = memory.displayParticipants()
+        val participants = memory.participantsInThisMemory()
         val speakerChoices = listOf(Participant("self", "我")) + participants
 
         LazyColumn(
@@ -253,7 +275,11 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
                                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(56.dp)) {
                                     ParticipantAvatar(participant, app.repository::absoluteMediaUrl, 50.dp)
                                     Spacer(Modifier.height(5.dp))
-                                    Text(participant.name, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    EditableParticipantName(
+                                        participant = participant,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        onClick = { showNameManager = true },
+                                    )
                                 }
                             }
                         }
@@ -272,7 +298,11 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
                     } else {
                         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                             highlights.forEach { highlight ->
-                                ConversationHighlightRow(highlight, app.repository::absoluteMediaUrl)
+                                ConversationHighlightRow(
+                                    highlight = highlight,
+                                    avatarUrl = app.repository::absoluteMediaUrl,
+                                    onManageNames = { showNameManager = true },
+                                )
                             }
                         }
                     }
@@ -291,6 +321,7 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
                                     participant = viewModel.transcriptParticipant(segment),
                                     avatarUrl = app.repository::absoluteMediaUrl,
                                     onChooseSpeaker = { pendingSpeakerSegment = segment },
+                                    onManageNames = { showNameManager = true },
                                 )
                             }
                         }
@@ -315,27 +346,6 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
                 }
             }
 
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = viewModel.queryQuestion,
-                        onValueChange = { viewModel.queryQuestion = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("在这条记忆中查询") },
-                        leadingIcon = { Icon(Icons.Default.Search, null) },
-                        singleLine = true,
-                    )
-                    Button(onClick = { viewModel.queryInMemory() }, modifier = Modifier.fillMaxWidth()) { Text("查询") }
-                }
-            }
-
-            viewModel.queryResult?.let { result ->
-                item { QueryResultCard(result) }
-                items(result.evidences, key = { it.evidenceId }) { evidence ->
-                    Text("[${evidence.type.name}] ${evidence.content}", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-
             viewModel.error?.let { message ->
                 item { Text(message, color = MaterialTheme.colorScheme.error) }
             }
@@ -344,11 +354,35 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
         pendingSpeakerSegment?.let { segment ->
             SpeakerChooser(
                 choices = speakerChoices,
+                avatarUrl = app.repository::absoluteMediaUrl,
                 onChoose = { participant ->
                     viewModel.assignSpeaker(segment.segmentId, participant)
                     pendingSpeakerSegment = null
                 },
                 onDismiss = { pendingSpeakerSegment = null },
+            )
+        }
+
+        if (showNameManager) {
+            ParticipantNameManager(
+                participants = participants,
+                avatarUrl = app.repository::absoluteMediaUrl,
+                onRename = {
+                    showNameManager = false
+                    participantToRename = it
+                },
+                onDismiss = { showNameManager = false },
+            )
+        }
+
+        participantToRename?.let { participant ->
+            RenameParticipantDialog(
+                participant = participant,
+                onSave = { name ->
+                    viewModel.renameParticipant(participant, name)
+                    participantToRename = null
+                },
+                onDismiss = { participantToRename = null },
             )
         }
     }
@@ -395,14 +429,25 @@ private fun MemorySection(title: String, content: @Composable ColumnScope.() -> 
 }
 
 @Composable
-private fun ConversationHighlightRow(highlight: ConversationHighlight, avatarUrl: (String?) -> String?) {
+private fun ConversationHighlightRow(
+    highlight: ConversationHighlight,
+    avatarUrl: (String?) -> String?,
+    onManageNames: () -> Unit,
+) {
     Row(verticalAlignment = Alignment.Top) {
         ParticipantAvatar(highlight.participant, avatarUrl, 52.dp)
         Spacer(Modifier.width(10.dp))
         EmotionBadge(highlight.emotion)
         Spacer(Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(highlight.participant?.name ?: "未识别人物", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+            highlight.participant?.let { participant ->
+                EditableParticipantName(
+                    participant = participant,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Medium,
+                    onClick = onManageNames,
+                )
+            } ?: Text("未识别人物", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
             Text(highlight.content, style = MaterialTheme.typography.bodyLarge)
         }
     }
@@ -431,6 +476,7 @@ private fun TranscriptRow(
     participant: Participant?,
     avatarUrl: (String?) -> String?,
     onChooseSpeaker: () -> Unit,
+    onManageNames: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.Top) {
         Text(segment.timestampMs.formatTimestamp(), modifier = Modifier.width(48.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -441,11 +487,23 @@ private fun TranscriptRow(
                 Text("选择", style = MaterialTheme.typography.labelSmall)
             }
         } else {
-            ParticipantAvatar(participant, avatarUrl, 38.dp)
+            Box(
+                modifier = Modifier.size(42.dp).clickable(onClickLabel = "重新选择说话人", onClick = onChooseSpeaker),
+                contentAlignment = Alignment.Center,
+            ) {
+                ParticipantAvatar(participant, avatarUrl, 38.dp)
+            }
         }
         Spacer(Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            participant?.let { Text(it.name, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            participant?.let {
+                EditableParticipantName(
+                    participant = it,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    onClick = onManageNames,
+                )
+            }
             Text(segment.content, style = MaterialTheme.typography.bodyLarge)
         }
     }
@@ -455,12 +513,14 @@ private fun TranscriptRow(
 private fun ParticipantAvatar(participant: Participant?, avatarUrl: (String?) -> String?, size: Dp) {
     val shape = androidx.compose.foundation.shape.CircleShape
     val resolvedUrl = participant?.avatarUrl?.let(avatarUrl)
-    if (resolvedUrl != null) {
+    var imageFailed by remember(resolvedUrl) { mutableStateOf(false) }
+    if (resolvedUrl != null && !imageFailed) {
         AsyncImage(
             model = resolvedUrl,
             contentDescription = participant.name,
             modifier = Modifier.size(size).clip(shape).border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape),
             contentScale = ContentScale.Crop,
+            onError = { imageFailed = true },
         )
     } else {
         Box(
@@ -490,34 +550,27 @@ private fun BindingRow(
 }
 
 @Composable
-private fun QueryResultCard(result: QueryResult) {
-    val color = when (result.status) {
-        QueryResultStatus.CONFIRMED -> MaterialTheme.colorScheme.primaryContainer
-        QueryResultStatus.POSSIBLE -> MaterialTheme.colorScheme.secondaryContainer
-        QueryResultStatus.NOT_FOUND -> MaterialTheme.colorScheme.surfaceVariant
-    }
-    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = color)) {
-        Text(
-            when (result.status) {
-                QueryResultStatus.CONFIRMED -> result.answer.orEmpty()
-                QueryResultStatus.POSSIBLE -> "可能相关：${result.uncertaintyReason ?: "证据置信度不足"}"
-                QueryResultStatus.NOT_FOUND -> "没有找到相关信息"
-            },
-            modifier = Modifier.padding(16.dp),
-        )
-    }
-}
-
-@Composable
-private fun SpeakerChooser(choices: List<Participant>, onChoose: (Participant) -> Unit, onDismiss: () -> Unit) {
+private fun SpeakerChooser(
+    choices: List<Participant>,
+    avatarUrl: (String?) -> String?,
+    onChoose: (Participant) -> Unit,
+    onDismiss: () -> Unit,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("这是谁在说话？") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 choices.distinctBy { it.participantId }.forEach { participant ->
-                    TextButton(onClick = { onChoose(participant) }, modifier = Modifier.fillMaxWidth()) {
-                        Text(participant.name, modifier = Modifier.weight(1f))
+                    item(key = participant.participantId) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.width(64.dp).clickable { onChoose(participant) },
+                        ) {
+                            ParticipantAvatar(participant, avatarUrl, 52.dp)
+                            Spacer(Modifier.height(6.dp))
+                            Text(participant.name, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
                 }
             }
@@ -525,3 +578,81 @@ private fun SpeakerChooser(choices: List<Participant>, onChoose: (Participant) -
         confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
 }
+
+@Composable
+private fun EditableParticipantName(
+    participant: Participant,
+    style: androidx.compose.ui.text.TextStyle,
+    modifier: Modifier = Modifier,
+    color: Color = MaterialTheme.colorScheme.onSurface,
+    fontWeight: FontWeight? = null,
+    onClick: () -> Unit,
+) {
+    Text(
+        text = participant.name,
+        modifier = modifier.clickable(onClickLabel = "管理人物名称", onClick = onClick),
+        style = style,
+        color = color,
+        fontWeight = fontWeight,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+@Composable
+private fun ParticipantNameManager(
+    participants: List<Participant>,
+    avatarUrl: (String?) -> String?,
+    onRename: (Participant) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("人物名称") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                participants.distinctBy { it.participantId }.forEach { participant ->
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        ParticipantAvatar(participant, avatarUrl, 40.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text(participant.name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                        IconButton(onClick = { onRename(participant) }) {
+                            Icon(Icons.Default.Edit, "修改 ${participant.name} 的名称")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("完成") } },
+    )
+}
+
+@Composable
+private fun RenameParticipantDialog(
+    participant: Participant,
+    onSave: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember(participant.participantId, participant.name) { mutableStateOf(participant.name) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("修改人物名称") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("人物名称") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(enabled = name.trim().isNotEmpty(), onClick = { onSave(name) }) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+private fun TimeMemoryDetail.participantsInThisMemory(): List<Participant> =
+    (displayParticipants() + conversationHighlights.mapNotNull { it.participant } + transcriptSegments.mapNotNull { it.participant })
+        .distinctBy { it.personId ?: it.participantId }

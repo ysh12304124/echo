@@ -14,9 +14,8 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
-        // 真机通过局域网访问后台：改成运行 uvicorn 的电脑局域网 IP。
-        // 模拟器用 10.0.2.2；真机用电脑 IP（如 192.168.1.130）。
-        buildConfigField("String", "API_BASE_URL", "\"http://192.168.1.130:8000/api/v1/\"")
+        // psh 分支后台运行在 192.168.0.153；模拟器仍可使用 10.0.2.2。
+        buildConfigField("String", "API_BASE_URL", "\"http://192.168.0.153:8000/api/v1/\"")
 
         // 眼镜端 Echo CustomApp 的包名与入口（须与 glasses/ 模块一致）。
         buildConfigField("String", "GLASS_APP_PACKAGE", "\"com.echo.glasses\"")

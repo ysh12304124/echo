@@ -145,7 +145,6 @@ interface EchoApiService {
 data class CreateSessionRequest(
     val memory_type: String,
     val scene: String? = null,
-    val scene_type: String? = null,  // 空间记忆：large / object
     val partition: String = "work",
     val title: String = "",
 )

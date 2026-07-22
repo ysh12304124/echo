@@ -293,31 +293,6 @@ fun HomeScreen(
                     Text(sceneText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f))
                 }
 
-                // 2.5. 空间记忆类型选择：仅在非录制状态下可切换；
-                // 决定下一次空间记忆走 大场景（路径浏览）还是 单物体（球面环绕）。
-                if (!isRec) {
-                    val pendingSpaceType by app.pendingSpaceSceneType.collectAsState()
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "下一次空间记忆:",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
-                            modifier = Modifier.padding(end = 8.dp),
-                        )
-                        FilterChip(
-                            selected = pendingSpaceType == SpaceSceneType.LARGE,
-                            onClick = { app.setPendingSpaceSceneType(SpaceSceneType.LARGE) },
-                            label = { Text("大场景") },
-                            modifier = Modifier.padding(end = 6.dp),
-                        )
-                        FilterChip(
-                            selected = pendingSpaceType == SpaceSceneType.OBJECT,
-                            onClick = { app.setPendingSpaceSceneType(SpaceSceneType.OBJECT) },
-                            label = { Text("单物体") },
-                        )
-                    }
-                }
-
                 // 3. 上传状态栏：仅记忆进行中(含收尾上传)时展示，全部完成后延迟隐藏。
                 AnimatedVisibility(visible = uploadStatus.visible) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

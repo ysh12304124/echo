@@ -22,6 +22,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.echo.phone.EchoApplication
 import com.echo.phone.data.EchoRepository
 import com.echo.phone.domain.*
+import com.echo.phone.ui.common.PathTraversal
 import com.echo.phone.ui.common.PointCloudViewer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -79,13 +80,7 @@ class SpaceDetailViewModel(
             }
             poses = parsed
 
-            val totalLen = parsed.zipWithNext { a, b ->
-                val dx = b.position[0] - a.position[0]
-                val dy = b.position[1] - a.position[1]
-                val dz = b.position[2] - a.position[2]
-                sqrt(dx * dx + dy * dy + dz * dz)
-            }.sum()
-            baseSpeed = if (totalLen > 0f) totalLen / 10f else 1f
+            baseSpeed = PathTraversal.speedForTenSecondLoop(parsed)
 
             if (s.sceneType == "object") {
                 orbitCircle = fitCircle3D(parsed)

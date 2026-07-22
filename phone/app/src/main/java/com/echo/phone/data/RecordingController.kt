@@ -66,14 +66,8 @@ class RecordingController(
         )
     }
 
-    suspend fun startTime(
-        scene: TimeScene,
-        partition: DataPartition,
-        title: String,
-        glassSid: String?,
-        sceneType: SpaceSceneType? = null,
-    ): String {
-        val id = repo.startSession(MemoryType.TIME, scene, partition, title, sceneType = sceneType)
+    suspend fun startTime(scene: TimeScene, partition: DataPartition, title: String, glassSid: String?): String {
+        val id = repo.startSession(MemoryType.TIME, scene, partition, title)
         EchoLog.i("创建会话 session=$id scene=$scene partition=$partition glassSid=$glassSid")
         sessionId = id
         this.glassSid = glassSid

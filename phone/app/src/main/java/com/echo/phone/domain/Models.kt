@@ -3,13 +3,6 @@ package com.echo.phone.domain
 enum class DataPartition { WORK, QUALITY_TIME }
 enum class TimeScene { MEETING, ONSITE, QUALITY_TIME }
 enum class MemoryType { TIME, SPACE }
-
-/**
- * 空间记忆场景类型：由手机端在开始录制空间记忆前选择，
- * 决定后期查看时 PointCloudViewer 的默认模式（LARGE→路径浏览，OBJECT→物体环绕）。
- */
-enum class SpaceSceneType { LARGE, OBJECT }
-
 enum class MemoryStatus {
     NOT_STARTED, RECORDING, PAUSED, UPLOADING, PROCESSING, COMPLETED, FAILED
 }

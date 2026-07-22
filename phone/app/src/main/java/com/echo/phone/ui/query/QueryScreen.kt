@@ -13,7 +13,6 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,8 +40,6 @@ import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.ViewInAr
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -75,6 +72,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -509,26 +507,34 @@ private fun QueryInputBar(
                 }
             }
             Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = onSend,
-                enabled = sendEnabled,
+            Box(
                 modifier = Modifier
-                    .width(72.dp)
-                    .height(42.dp),
-                shape = RoundedCornerShape(21.dp),
-                contentPadding = PaddingValues(0.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
-                    disabledContentColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.72f),
-                ),
+                    .width(60.dp)
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .clickable(enabled = sendEnabled, role = Role.Button, onClick = onSend),
+                contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    Icons.Default.ArrowUpward,
-                    contentDescription = "发送查询",
-                    modifier = Modifier.size(21.dp),
-                )
+                Box(
+                    modifier = Modifier
+                        .width(56.dp)
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(
+                            if (sendEnabled) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.ArrowUpward,
+                        contentDescription = "发送查询",
+                        tint = MaterialTheme.colorScheme.onPrimary.copy(
+                            alpha = if (sendEnabled) 1f else 0.72f,
+                        ),
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
             }
         }
     }

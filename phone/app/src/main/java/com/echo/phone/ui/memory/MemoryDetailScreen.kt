@@ -1,5 +1,6 @@
 package com.echo.phone.ui.memory
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -31,6 +32,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardActions
@@ -140,6 +142,14 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
     }
 
     Scaffold(
+        modifier = Modifier
+            .imePadding()
+            .padding(bottom = if (keyboardVisible) 12.dp else 0.dp),
+        contentWindowInsets = if (keyboardVisible) {
+            WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+        } else {
+            ScaffoldDefaults.contentWindowInsets
+        },
         topBar = {
             TopAppBar(
                 title = { Text(vm.memory?.title ?: "记忆详情") },
@@ -159,6 +169,16 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
                 },
             )
         },
+        bottomBar = {
+            if (!vm.loading && vm.memory != null) {
+                MemoryQueryInputRow(
+                    question = vm.queryQuestion,
+                    onQuestionChange = { vm.queryQuestion = it },
+                    onSubmit = submitMemoryQuery,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+        },
     ) { padding ->
         if (vm.loading) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
@@ -173,9 +193,7 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .imePadding()
-                .padding(bottom = if (keyboardVisible) 12.dp else 0.dp),
+                .padding(padding),
             contentPadding = PaddingValues(
                 start = 16.dp,
                 top = 16.dp,
@@ -290,48 +308,6 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
                 }
             }
 
-            // 在当前记忆中查询
-            item {
-                Spacer(Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedTextField(
-                        value = vm.queryQuestion,
-                        onValueChange = { vm.queryQuestion = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("在此记忆中查询…") },
-                        leadingIcon = { Icon(Icons.Default.Search, null) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = { submitMemoryQuery() }),
-                    )
-                    Button(
-                        onClick = submitMemoryQuery,
-                        enabled = vm.queryQuestion.isNotBlank(),
-                        modifier = Modifier
-                            .width(72.dp)
-                            .height(42.dp),
-                        shape = RoundedCornerShape(21.dp),
-                        contentPadding = PaddingValues(0.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary,
-                            disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
-                            disabledContentColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.72f),
-                        ),
-                    ) {
-                        Icon(
-                            Icons.Default.ArrowUpward,
-                            contentDescription = "发送查询",
-                            modifier = Modifier.size(21.dp),
-                        )
-                    }
-                }
-            }
-
             // 查询结果
             vm.queryResult?.let { result ->
                 item {
@@ -377,6 +353,64 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
             },
             dismissButton = { TextButton(onClick = { showDeleteDialog = false }) { Text("取消") } },
         )
+    }
+}
+
+@Composable
+private fun MemoryQueryInputRow(
+    question: String,
+    onQuestionChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = question,
+            onValueChange = onQuestionChange,
+            modifier = Modifier.weight(1f),
+            placeholder = { Text("在此记忆中查询…") },
+            leadingIcon = { Icon(Icons.Default.Search, null) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
+        )
+        Box(
+            modifier = Modifier
+                .width(60.dp)
+                .height(48.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .clickable(
+                    enabled = question.isNotBlank(),
+                    role = Role.Button,
+                    onClick = onSubmit,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(56.dp)
+                    .height(36.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(
+                        if (question.isNotBlank()) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.ArrowUpward,
+                    contentDescription = "发送查询",
+                    tint = MaterialTheme.colorScheme.onPrimary.copy(
+                        alpha = if (question.isNotBlank()) 1f else 0.72f,
+                    ),
+                    modifier = Modifier.size(19.dp),
+                )
+            }
+        }
     }
 }
 

@@ -22,6 +22,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.echo.phone.EchoApplication
 import com.echo.phone.data.EchoRepository
 import com.echo.phone.domain.*
+import com.echo.phone.ui.common.PathTraversal
 import com.echo.phone.ui.common.PointCloudViewer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -79,13 +80,7 @@ class SpaceDetailViewModel(
             }
             poses = parsed
 
-            val totalLen = parsed.zipWithNext { a, b ->
-                val dx = b.position[0] - a.position[0]
-                val dy = b.position[1] - a.position[1]
-                val dz = b.position[2] - a.position[2]
-                sqrt(dx * dx + dy * dy + dz * dz)
-            }.sum()
-            baseSpeed = if (totalLen > 0f) totalLen / 10f else 1f
+            baseSpeed = PathTraversal.speedForTenSecondLoop(parsed)
 
             if (s.sceneType == "object") {
                 orbitCircle = fitCircle3D(parsed)
@@ -302,7 +297,14 @@ fun SpaceDetailScreen(spaceId: String, onBack: () -> Unit) {
                     else -> "质量：未知"
                 }
                 Text(qualityLabel, style = MaterialTheme.typography.labelLarge)
-                Text(space.identifyBrief, style = MaterialTheme.typography.bodyLarge)
+                if (space.sceneSummary.isNotBlank()) {
+                    Text(space.sceneSummary, style = MaterialTheme.typography.bodyLarge)
+                } else {
+                    Text(space.identifyBrief, style = MaterialTheme.typography.bodyLarge)
+                }
+                space.loopAngle?.let { angle ->
+                    Text("环绕角度：${"%.1f".format(angle)}°", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
 
                 Spacer(Modifier.height(16.dp))
 
@@ -355,7 +357,10 @@ fun SpaceDetailScreen(spaceId: String, onBack: () -> Unit) {
                     space.anchors.forEach { a ->
                         ListItem(
                             headlineContent = { Text(a.name) },
-                            supportingContent = { Text(a.anchorType) },
+                            supportingContent = {
+                                val posText = a.position?.let { "(%.2f, %.2f, %.2f)".format(it.x, it.y, it.z) }
+                                Text(listOfNotNull(a.anchorType, posText).joinToString(" · "))
+                            },
                         )
                     }
                     Spacer(Modifier.height(16.dp))

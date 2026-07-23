@@ -48,7 +48,7 @@ fun SpaceMemoryDetail.toMemorySummary() = MemorySummary(
     memoryType = MemoryType.SPACE,
     status = if (modelUrl.isNullOrBlank() || modelUrl.contains("placeholder")) MemoryStatus.PROCESSING else MemoryStatus.COMPLETED,
     identifyBrief = identifyBrief,
-    title = title.ifBlank { "空间记忆" },
+    title = sceneSummary.ifBlank { title.ifBlank { "空间记忆" } },
     scene = null,
     partition = partition,
     startedAt = capturedAt,
@@ -139,8 +139,9 @@ class HomeViewModel(
 
     fun connectGlasses() {
         viewModelScope.launch {
-            try { glasses.connect(); error = null }
-            catch (e: Exception) { error = "连接失败: ${e.message}" }
+            // 眼镜连接与记忆库读取相互独立；离线查看已完成记忆不能被连接失败遮住。
+            try { glasses.connect() }
+            catch (_: Exception) { }
         }
     }
 }
@@ -323,6 +324,48 @@ fun HomeScreen(
                         UploadChip("视频", uploadStatus.videoDone)
                         UploadChip("音频", uploadStatus.audioDone)
                         if (uploadStatus.spaceEnabled) UploadChip("IMU", uploadStatus.imuDone)
+                    }
+                }
+
+                // 4. 空间记忆控制
+                val inlineSpaceActive by app.inlineSpaceActive.collectAsState()
+                val scope = rememberCoroutineScope()
+                var selectedSpaceType by remember { mutableStateOf(SpaceSceneType.LARGE) }
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // 场景选择（始终显示）
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("空间场景:", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                        FilterChip(
+                            selected = selectedSpaceType == SpaceSceneType.LARGE,
+                            onClick = { selectedSpaceType = SpaceSceneType.LARGE },
+                            label = { Text("大场景") },
+                        )
+                        FilterChip(
+                            selected = selectedSpaceType == SpaceSceneType.OBJECT,
+                            onClick = { selectedSpaceType = SpaceSceneType.OBJECT },
+                            label = { Text("单物体") },
+                        )
+                    }
+
+                    // 开启/结束按钮
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (!inlineSpaceActive) {
+                            Button(
+                                onClick = { scope.launch { app.startInlineSpace(selectedSpaceType) } },
+                                enabled = isRec,
+                            ) {
+                                Text("开启空间记忆")
+                            }
+                            if (!isRec) {
+                                Text("（需TIME录制中）", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                            }
+                        } else {
+                            Text("3D 记忆中", style = MaterialTheme.typography.bodyMedium, color = Color(0xFFF59E0B))
+                            Button(onClick = { scope.launch { app.stopInlineSpace() } }) {
+                                Text("结束空间记忆")
+                            }
+                        }
                     }
                 }
             }

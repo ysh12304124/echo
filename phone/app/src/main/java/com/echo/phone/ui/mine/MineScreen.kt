@@ -5,9 +5,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -36,13 +39,20 @@ fun MineScreen(
     onNavigateDevice: () -> Unit,
     onNavigateStorage: () -> Unit,
     onNavigateHelp: () -> Unit,
+    onNavigateDiagnostics: () -> Unit,
     onNavigateFavorites: () -> Unit,
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as EchoApplication
     val ds by app.glassesConnection.deviceStatus.collectAsState()
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp).padding(top = 20.dp)) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp)
+            .padding(top = 20.dp, bottom = 20.dp),
+    ) {
         Text("我的", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(18.dp))
 
@@ -66,7 +76,9 @@ fun MineScreen(
                 HorizontalDivider(color = GlassBorder)
                 MineItem(Icons.Default.Storage, "存储与隐私", "删除、导出、权限管理", onClick = onNavigateStorage)
                 HorizontalDivider(color = GlassBorder)
-                MineItem(Icons.Default.Help, "帮助说明", "LED 含义、查询范围说明", onClick = onNavigateHelp)
+                MineItem(Icons.AutoMirrored.Filled.Help, "帮助与说明", "LED 含义、查询范围说明", onClick = onNavigateHelp)
+                HorizontalDivider(color = GlassBorder)
+                MineItem(Icons.Default.BugReport, "诊断日志", "查看崩溃与调试日志", onClick = onNavigateDiagnostics)
             }
         }
     }

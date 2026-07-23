@@ -1,11 +1,13 @@
 package com.echo.phone.ui.memory
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -28,7 +30,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -46,6 +54,7 @@ class MemoryDetailViewModel(
     var bindings by mutableStateOf<List<TimeSpaceBinding>>(emptyList())
     var queryQuestion by mutableStateOf("")
     var queryResult by mutableStateOf<QueryResult?>(null)
+    var queryLoading by mutableStateOf(false)
     var loading by mutableStateOf(true)
     var isFavorited by mutableStateOf(false)
     var isLocked by mutableStateOf(false)
@@ -101,12 +110,21 @@ class MemoryDetailViewModel(
     }
 
     fun queryInMemory(preset: String? = null) {
-        val q = preset ?: queryQuestion
-        if (preset != null) queryQuestion = preset
-        if (q.isBlank()) return
+        val q = (preset ?: queryQuestion).trim()
+        if (q.isBlank() || queryLoading) return
+        if (preset != null) queryQuestion = q
+        queryLoading = true
+        queryResult = null
+        error = null
         viewModelScope.launch {
-            try { queryResult = repo.query(q, QueryScope.MEMORY, memoryId) }
-            catch (e: Exception) { error = e.message }
+            try {
+                queryResult = repo.query(q, QueryScope.MEMORY, memoryId)
+                queryQuestion = ""
+            } catch (e: Exception) {
+                error = e.message
+            } finally {
+                queryLoading = false
+            }
         }
     }
 }
@@ -124,8 +142,21 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
         }
     )
     var showDeleteDialog by remember { mutableStateOf(false) }
+    val density = LocalDensity.current
+    val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
+    val focusManager = LocalFocusManager.current
+
+    val submitMemoryQuery = {
+        vm.queryInMemory()
+        focusManager.clearFocus()
+    }
 
     Scaffold(
+        contentWindowInsets = if (keyboardVisible) {
+            WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+        } else {
+            ScaffoldDefaults.contentWindowInsets
+        },
         topBar = {
             TopAppBar(
                 title = { Text(vm.memory?.title ?: "记忆详情") },
@@ -156,7 +187,19 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
         val memory = vm.memory ?: return@Scaffold
         val nav = memory.navigationSummary
 
-        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .imePadding()
+                .padding(bottom = if (keyboardVisible) 12.dp else 0.dp),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                top = 16.dp,
+                end = 16.dp,
+                bottom = 16.dp,
+            ),
+        ) {
             // 基本信息
             item {
                 Text("${memory.scene.name} · ${memory.partition.name} · ${memory.durationSeconds}s",
@@ -237,7 +280,15 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
                 if (questions.isNotEmpty()) {
                     item {
                         DetailSection("可问问题") {
-                            Column { questions.forEach { q -> SuggestionChip(onClick = { vm.queryInMemory(q) }, label = { Text(q) }) } }
+                            Column {
+                                questions.forEach { q ->
+                                    SuggestionChip(
+                                        onClick = { vm.queryInMemory(q) },
+                                        label = { Text(q) },
+                                        enabled = !vm.queryLoading,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -266,19 +317,13 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
 
             // 在当前记忆中查询
             item {
-                Spacer(Modifier.height(16.dp))
-                OutlinedTextField(
-                    value = vm.queryQuestion,
-                    onValueChange = { vm.queryQuestion = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("在此记忆中查询…") },
-                    leadingIcon = { Icon(Icons.Default.Search, null) },
-                    singleLine = true,
+                MemoryQueryInputRow(
+                    question = vm.queryQuestion,
+                    onQuestionChange = { vm.queryQuestion = it },
+                    onSubmit = submitMemoryQuery,
+                    loading = vm.queryLoading,
+                    modifier = Modifier.padding(top = 16.dp),
                 )
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = { vm.queryInMemory() }, modifier = Modifier.fillMaxWidth()) {
-                    Text("查询")
-                }
             }
 
             // 查询结果
@@ -326,6 +371,74 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
             },
             dismissButton = { TextButton(onClick = { showDeleteDialog = false }) { Text("取消") } },
         )
+    }
+}
+
+@Composable
+private fun MemoryQueryInputRow(
+    question: String,
+    onQuestionChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    loading: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = question,
+            onValueChange = onQuestionChange,
+            modifier = Modifier.weight(1f),
+            enabled = !loading,
+            placeholder = { Text("在此记忆中查询…") },
+            leadingIcon = { Icon(Icons.Default.Search, null) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
+        )
+        Box(
+            modifier = Modifier
+                .width(60.dp)
+                .height(48.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .clickable(
+                    enabled = question.isNotBlank() && !loading,
+                    role = Role.Button,
+                    onClick = onSubmit,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(56.dp)
+                    .height(36.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(
+                        if (question.isNotBlank() || loading) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (loading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.ArrowUpward,
+                        contentDescription = "发送查询",
+                        tint = MaterialTheme.colorScheme.onPrimary.copy(
+                            alpha = if (question.isNotBlank()) 1f else 0.72f,
+                        ),
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+            }
+        }
     }
 }
 

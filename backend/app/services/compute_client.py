@@ -28,10 +28,19 @@ from app.logging_setup import get_logger
 from app.providers import ProviderFactory, get_provider_factory, get_settings
 from app.repositories.database import async_session_factory
 from app.repositories.memory_repo import MemoryRepository
+from app.services.keyframe_index import index_memory_keyframes
 
 log = get_logger("compute_client")
 
 _SUBMIT_TIMEOUT_SECONDS = 5.0
+
+
+class ComputeTranscriptionUnavailable(RuntimeError):
+    pass
+
+
+class ComputeTranscriptionTimeout(ComputeTranscriptionUnavailable):
+    pass
 
 
 @dataclass
@@ -73,6 +82,9 @@ class ComputeClient(ABC):
     @abstractmethod
     async def submit_space(self, job: SpaceAnalyzeJob) -> None: ...
 
+    @abstractmethod
+    async def transcribe(self, audio_path: str) -> dict[str, Any]: ...
+
 
 class HttpComputeClient(ComputeClient):
     """真的把任务 POST 给算力服务；提交本身也是"发完即走"，不等处理结果。
@@ -80,10 +92,39 @@ class HttpComputeClient(ComputeClient):
     本期不做重试：提交失败只记警告日志，记忆保持 processing，可接受(见协议文档"简化"一节)。
     """
 
-    def __init__(self, base_url: str, callback_base_url: str, internal_token: str):
+    def __init__(
+        self,
+        base_url: str,
+        callback_base_url: str,
+        internal_token: str,
+        request_timeout: float = 120.0,
+    ):
         self.base_url = base_url.rstrip("/")
         self.callback_base_url = callback_base_url.rstrip("/")
         self.internal_token = internal_token
+        self.request_timeout = request_timeout
+
+    async def transcribe(self, audio_path: str) -> dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=self.request_timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/transcribe",
+                    headers={"X-Internal-Token": self.internal_token},
+                    json={
+                        "audio_path": audio_path,
+                        "sample_rate_hz": 16000,
+                        "channels": 1,
+                        "sample_width_bytes": 2,
+                    },
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.TimeoutException as exc:
+            raise ComputeTranscriptionTimeout("compute transcription timed out") from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ComputeTranscriptionUnavailable(
+                f"compute transcription failed: {exc}"
+            ) from exc
 
     def _callback_url(self, kind: str) -> str:
         return f"{self.callback_base_url}/api/v1/internal/callback/{kind}"
@@ -139,7 +180,6 @@ class HttpComputeClient(ComputeClient):
             f"session={job.session_id} memory={job.memory_id} type=space",
         )
 
-
 class MockComputeClient(ComputeClient):
     """本地直接回填假结果，不发真实网络请求，便于无算力服务时联调/跑测试。
 
@@ -179,6 +219,9 @@ class MockComputeClient(ComputeClient):
                 {"identify_brief": "(mock 占位结果)", "quality": "good"},
             )
 
+    async def transcribe(self, audio_path: str) -> dict[str, Any]:
+        return {"text": "", "duration_ms": 0, "avg_logprob": None}
+
 
 @lru_cache
 def get_compute_client() -> ComputeClient:
@@ -188,6 +231,7 @@ def get_compute_client() -> ComputeClient:
             base_url=settings.compute_base_url,
             callback_base_url=settings.public_callback_base_url,
             internal_token=settings.internal_token,
+            request_timeout=settings.request_timeout_seconds,
         )
     return MockComputeClient()
 
@@ -224,11 +268,18 @@ async def apply_audio_result(
         await repo.save_evidence(ev)
         embedding = providers.embedding()
         vector_store = providers.vector_store()
-        emb = await embedding.embed(transcript)
+        # TODO: 长音频转录应按时间或语义分段入库和嵌入；届时需要调整数据库结构，
+        # 让一条记忆对应多个 transcript 片段和文本向量，而不是当前单 Evidence/单向量。
+        emb = await embedding.embed_document(transcript)
         await vector_store.upsert(
             str(ev.id),
             emb.vector,
-            {"memory_id": str(memory_id), "partition": memory.partition.value, "type": "transcript"},
+            {
+                "memory_id": str(memory_id),
+                "partition": memory.partition.value,
+                "type": "transcript",
+                "content": transcript,
+            },
         )
 
     await repo.update_time_memory(
@@ -245,7 +296,11 @@ async def apply_audio_result(
 
 
 async def apply_time_result(
-    repo: MemoryRepository, memory_id: UUID, status: str, result: dict[str, Any]
+    repo: MemoryRepository,
+    memory_id: UUID,
+    status: str,
+    result: dict[str, Any],
+    providers: ProviderFactory | None = None,
 ) -> None:
     memory = await repo.get_time_memory(memory_id)
     if not memory:
@@ -275,6 +330,15 @@ async def apply_time_result(
         key_frames=key_frames,
         evidence_status="ready" if (identify_brief or key_frames) else None,
     )
+    if key_frames is not None and get_settings().visual_retrieval_enabled:
+        updated_memory = await repo.get_time_memory(memory_id)
+        if updated_memory:
+            try:
+                await index_memory_keyframes(
+                    updated_memory, providers or get_provider_factory()
+                )
+            except Exception as exc:
+                log.error("关键帧向量化失败 memory=%s: %s", memory_id, exc)
     if memory.session_id:
         await repo.link_session_memory(memory.session_id, memory_id, MemoryStatus.COMPLETED)
 

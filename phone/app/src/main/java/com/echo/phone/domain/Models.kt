@@ -107,6 +107,9 @@ data class QueryEvidence(
     val type: EvidenceType,
     val content: String,
     val confidence: ConfidenceLevel,
+    val sourceConfidence: ConfidenceLevel? = null,
+    val retrievalScore: Double? = null,
+    val usedInAnswer: Boolean = false,
     val mediaUrl: String?,
     val timestampMs: Long,
 )
@@ -157,6 +160,23 @@ data class QuerySource(
     val memoryTitle: String,
     val scene: TimeScene?,
     val timeOffsetSeconds: Int,
+)
+
+data class VoiceQueryResult(
+    val transcript: String,
+    val durationMs: Int = 0,
+    val asrAvgLogprob: Double?,
+    val asrAccepted: Boolean,
+    val rejectionReason: String?,
+    val result: QueryResult?,
+)
+
+data class VoiceTranscriptionResult(
+    val transcript: String,
+    val durationMs: Int,
+    val asrAvgLogprob: Double?,
+    val asrAccepted: Boolean,
+    val rejectionReason: String?,
 )
 
 data class SpaceAnchor(

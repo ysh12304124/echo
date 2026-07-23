@@ -188,6 +188,9 @@ class QueryEvidenceResponse(BaseModel):
     type: EvidenceType
     content: str
     confidence: ConfidenceLevel
+    source_confidence: Optional[ConfidenceLevel] = None
+    retrieval_score: Optional[float] = None
+    used_in_answer: bool = False
     media_url: Optional[str] = None
     timestamp_ms: int = 0
 
@@ -206,6 +209,23 @@ class QueryResponse(BaseModel):
     evidences: list[QueryEvidenceResponse] = Field(default_factory=list)
     sources: list[QuerySourceResponse] = Field(default_factory=list)
     uncertainty_reason: Optional[str] = None
+
+
+class VoiceTranscriptionResponse(BaseModel):
+    transcript: str = ""
+    duration_ms: int = 0
+    asr_avg_logprob: Optional[float] = None
+    asr_accepted: bool
+    rejection_reason: Optional[str] = None
+
+
+class VoiceQueryResponse(BaseModel):
+    transcript: str = ""
+    duration_ms: int = 0
+    asr_avg_logprob: Optional[float] = None
+    asr_accepted: bool
+    rejection_reason: Optional[str] = None
+    result: Optional[QueryResponse] = None
 
 
 # --- Persons ---

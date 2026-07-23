@@ -9,12 +9,19 @@
 
 from __future__ import annotations
 
+import math
+import base64
+import mimetypes
+from pathlib import Path
+
 from app.providers.base import (
     EmbeddingProvider,
     EmbeddingResult,
+    ImageInput,
     LLMProvider,
 )
 from app.providers.local.openai_client import OpenAICompatClient, parse_json_loose
+from app.providers.local.prompt_templates import render_prompt_template
 
 # 时间记忆各场景的关键瞬间触发类型（对齐产品文档 5.x）
 SCENE_EVENT_TYPES = {
@@ -128,6 +135,68 @@ class LocalLLMProvider(LLMProvider):
             }
         return {"answer": "", "confidence": "low"}
 
+    async def answer_query_multimodal(
+        self,
+        question: str,
+        evidence_context: str,
+        images: list[ImageInput],
+    ) -> dict:
+        system = render_prompt_template("query_multimodal_system.md")
+        user_text = render_prompt_template(
+            "query_multimodal_user.md",
+            question=question,
+            evidence_context=evidence_context or "(无文字证据)",
+        )
+        content: list[dict] = [
+            {
+                "type": "text",
+                "text": user_text,
+            }
+        ]
+        for image in images:
+            path = Path(image.path)
+            if not path.is_file():
+                continue
+            mime = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+            if image.caption:
+                content.append({"type": "text", "text": f"图片说明: {image.caption}"})
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{encoded}"},
+                }
+            )
+        response = await self.client.chat(
+            self.model,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": content},
+            ],
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        parsed = parse_json_loose(response)
+        if isinstance(parsed, dict):
+            raw_refs = parsed.get("used_evidence_refs")
+            used_refs = (
+                [str(item).strip() for item in raw_refs if str(item).strip()]
+                if isinstance(raw_refs, list)
+                else []
+            )
+            return {
+                "answer": (parsed.get("answer") or "").strip(),
+                "confidence": parsed.get("confidence", "low"),
+                "evidence_sufficient": parsed.get("evidence_sufficient") is True,
+                "used_evidence_refs": used_refs,
+            }
+        return {
+            "answer": "",
+            "confidence": "low",
+            "evidence_sufficient": False,
+            "used_evidence_refs": [],
+        }
+
     async def build_navigation_summary(self, scene: str, transcript: str) -> dict:
         system = (
             "生成一段记忆的『导航型摘要』——一个可查询目录，帮助用户知道这段记忆里有什么、"
@@ -150,10 +219,34 @@ class LocalLLMProvider(LLMProvider):
 
 
 class LocalEmbeddingProvider(EmbeddingProvider):
-    def __init__(self, client: OpenAICompatClient, model: str):
+    def __init__(
+        self,
+        client: OpenAICompatClient,
+        model: str,
+        query_instruction: str | None = None,
+        expected_dimension: int | None = None,
+    ):
         self.client = client
         self.model = model
+        self.query_instruction = query_instruction
+        self.expected_dimension = expected_dimension
 
     async def embed(self, text: str) -> EmbeddingResult:
         vectors = await self.client.embeddings(self.model, [text])
-        return EmbeddingResult(vector=vectors[0], text=text)
+        vector = vectors[0]
+        if not vector or not all(math.isfinite(value) for value in vector):
+            raise ValueError("embedding service returned an invalid vector")
+        if self.expected_dimension and len(vector) != self.expected_dimension:
+            raise ValueError(
+                f"embedding dimension mismatch: expected {self.expected_dimension}, "
+                f"got {len(vector)}"
+            )
+        return EmbeddingResult(vector=vector, text=text)
+
+    async def embed_query(self, text: str) -> EmbeddingResult:
+        if not self.query_instruction:
+            return await self.embed(text)
+        return await self.embed(f"Instruct: {self.query_instruction}\nQuery: {text}")
+
+    async def embed_document(self, text: str) -> EmbeddingResult:
+        return await self.embed(text)

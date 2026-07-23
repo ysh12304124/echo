@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chinese-CLIP 检索基准</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>Chinese-CLIP 检索基准</h1>
+      <p id="modelSummary">正在读取模型状态</p>
+    </div>
+    <span id="stateBadge" class="state-badge">连接中</span>
+  </header>
+
+  <main>
+    <section class="control-band" aria-label="检索控制">
+      <form id="searchForm" class="search-row">
+        <label class="field search-field">
+          <span>查询文本</span>
+          <input id="queryInput" type="search" maxlength="512" autocomplete="off"
+                 value="星河四节点白板流程" required>
+        </label>
+        <button id="searchButton" type="submit">检索 Top 20</button>
+      </form>
+
+      <div class="model-row">
+        <label class="field quant-field">
+          <span>切换到</span>
+          <select id="quantizationSelect">
+            <option value="fp16">FP16</option>
+            <option value="int8">INT8</option>
+            <option value="nf4">NF4 4-bit</option>
+          </select>
+        </label>
+        <button id="reloadButton" type="button" class="secondary">重启并重建索引</button>
+      </div>
+    </section>
+
+    <section class="metrics-band" aria-label="运行指标">
+      <div class="metric"><span>GPU</span><strong id="gpuName">--</strong></div>
+      <div class="metric"><span>设备显存</span><strong id="deviceMemory">--</strong></div>
+      <div class="metric"><span>本进程分配</span><strong id="processMemory">--</strong></div>
+      <div class="metric"><span>图片索引</span><strong id="imageCount">--</strong></div>
+      <div class="metric"><span>模型加载</span><strong id="loadTime">--</strong></div>
+      <div class="metric"><span>索引构建</span><strong id="indexTime">--</strong></div>
+    </section>
+
+    <section class="results-header">
+      <div>
+        <h2>检索结果</h2>
+        <p id="resultMeta">Top 20 · CLIP 余弦相似度 · 无阈值过滤</p>
+      </div>
+      <div id="queryTiming" class="query-timing"></div>
+    </section>
+
+    <div id="emptyState" class="empty-state">输入查询文本后开始检索</div>
+    <section id="resultsGrid" class="results-grid" aria-live="polite"></section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

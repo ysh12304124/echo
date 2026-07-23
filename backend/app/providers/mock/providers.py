@@ -9,7 +9,12 @@ from app.providers.base import (
     EmbeddingProvider,
     EmbeddingResult,
     LLMProvider,
+    RerankCandidate,
+    RerankResult,
+    RerankerProvider,
+    VectorIndexInfo,
     VectorStore,
+    VisualEmbeddingProvider,
 )
 
 
@@ -94,12 +99,57 @@ class MockEmbeddingProvider(EmbeddingProvider):
     return EmbeddingResult(vector=vec.tolist(), text=text)
 
 
+class MockRerankerProvider(RerankerProvider):
+  async def rerank(
+    self, query: str, candidates: list[RerankCandidate]
+  ) -> list[RerankResult]:
+    return [RerankResult(id=candidate.id, score=1.0) for candidate in candidates]
+
+
+class MockVisualEmbeddingProvider(VisualEmbeddingProvider):
+  DIM = 512
+
+  async def embed_text(self, text: str) -> EmbeddingResult:
+    vec = np.zeros(self.DIM, dtype=np.float32)
+    for index, token in enumerate(text):
+      vec[(hash(token) + index) % self.DIM] += 1.0
+    norm = np.linalg.norm(vec)
+    if norm:
+      vec /= norm
+    return EmbeddingResult(vector=vec.tolist(), text=text)
+
+  async def embed_images(self, images: list[bytes]) -> list[EmbeddingResult]:
+    results = []
+    for image in images:
+      vector = np.zeros(self.DIM, dtype=np.float32)
+      for index, value in enumerate(image[:4096]):
+        vector[(value + index) % self.DIM] += 1.0
+      norm = np.linalg.norm(vector)
+      if norm:
+        vector /= norm
+      results.append(EmbeddingResult(vector=vector.tolist(), text=""))
+    return results
+
+
 class InMemoryVectorStore(VectorStore):
   def __init__(self):
     self._store: dict[str, tuple[list[float], dict]] = {}
+    self._model = "mock-embedding"
+    self._dimension: int | None = None
 
   async def upsert(self, id: str, vector: list[float], metadata: dict) -> None:
-    self._store[id] = (vector, metadata)
+    if self._dimension is None:
+      self._dimension = len(vector)
+    if len(vector) != self._dimension:
+      raise ValueError("vector dimension mismatch")
+    self._store[id] = (
+      vector,
+      {
+        **metadata,
+        "embedding_model": self._model,
+        "embedding_dimension": self._dimension,
+      },
+    )
 
   async def search(
     self, vector: list[float], top_k: int = 10, filter: Optional[dict] = None
@@ -116,8 +166,51 @@ class InMemoryVectorStore(VectorStore):
     results.sort(key=lambda x: x[1], reverse=True)
     return results[:top_k]
 
+  async def fts_search(
+    self, query: str, top_k: int = 10, filter: Optional[dict] = None
+  ) -> list[tuple[str, float, dict]]:
+    query_terms = set(query)
+    results = []
+    for id, (_vector, meta) in self._store.items():
+      if filter and not all(meta.get(k) == val for k, val in filter.items()):
+        continue
+      content = str(meta.get("content") or "")
+      score = float(sum(1 for term in query_terms if term in content))
+      if score > 0:
+        results.append((id, score, meta))
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results[:top_k]
+
   async def delete(self, id: str) -> None:
     self._store.pop(id, None)
+
+  async def replace_all(
+    self, entries: list[tuple[str, list[float], dict]]
+  ) -> None:
+    if entries:
+      self._dimension = len(entries[0][1])
+    if any(len(vector) != self._dimension for _, vector, _ in entries):
+      raise ValueError("vector dimension mismatch")
+    self._store = {
+      entry_id: (
+        vector,
+        {
+          **metadata,
+          "embedding_model": self._model,
+          "embedding_dimension": self._dimension,
+        },
+      )
+      for entry_id, vector, metadata in entries
+    }
+
+  async def index_info(self) -> Optional[VectorIndexInfo]:
+    if self._dimension is None:
+      return None
+    return VectorIndexInfo(
+      model=self._model,
+      dimension=self._dimension,
+      count=len(self._store),
+    )
 
   async def delete_by_filter(self, filter: dict) -> None:
     to_delete = [

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -26,6 +27,7 @@ object EchoLog {
     private val dateFmt = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.CHINA)
     private val ioExecutor = Executors.newSingleThreadExecutor()
     @Volatile private var logFile: File? = null
+    @Volatile private var crashHandlerInstalled = false
 
     /** 需在 Application.onCreate 最早处调用一次，之后才会落文件日志(仍会正常写 logcat)。 */
     fun init(context: Context) {
@@ -35,6 +37,7 @@ object EchoLog {
             val f = File(dir, "echo_phone.log")
             logFile = f
             append("===== app start pid=${android.os.Process.myPid()} =====")
+            installCrashHandler()
         } catch (e: Exception) {
             Log.e(TAG, "EchoLog.init failed: ${e.message}")
         }
@@ -43,6 +46,43 @@ object EchoLog {
     fun i(msg: String) { Log.i(TAG, msg); append("I $msg") }
     fun w(msg: String) { Log.w(TAG, msg); append("W $msg") }
     fun e(msg: String, t: Throwable? = null) { Log.e(TAG, msg, t); append("E $msg${if (t != null) " " + Log.getStackTraceString(t) else ""}") }
+    fun logFilePath(): String = logFile?.absolutePath ?: "日志尚未初始化"
+
+    fun recentLines(maxLines: Int = 120): String {
+        val f = logFile ?: return "日志尚未初始化"
+        return try {
+            if (!f.exists()) return "暂无日志"
+            f.readLines().takeLast(maxLines).joinToString("\n").ifBlank { "暂无日志" }
+        } catch (e: IOException) {
+            "读取日志失败: ${e.message}"
+        } catch (e: SecurityException) {
+            "读取日志失败: ${e.message}"
+        }
+    }
+
+    fun clear() {
+        val f = logFile ?: return
+        try {
+            FileOutputStream(f, false).use {
+                it.write("${dateFmt.format(Date())} ===== log cleared =====\n".toByteArray())
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "EchoLog.clear failed: ${e.message}")
+        }
+    }
+
+    private fun installCrashHandler() {
+        if (crashHandlerInstalled) return
+        crashHandlerInstalled = true
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            val stack = Log.getStackTraceString(throwable)
+            val line = "F uncaught thread=${thread.name} ${throwable.javaClass.name}: ${throwable.message}\n$stack"
+            Log.e(TAG, line)
+            appendSync(line)
+            previous?.uncaughtException(thread, throwable)
+        }
+    }
 
     private fun append(line: String) {
         val f = logFile ?: return
@@ -53,6 +93,15 @@ object EchoLog {
             } catch (_: Exception) {
                 // 文件写入失败不应影响主流程，忽略即可(logcat 一路仍正常)。
             }
+        }
+    }
+
+    private fun appendSync(line: String) {
+        val f = logFile ?: return
+        val stamped = "${dateFmt.format(Date())} $line\n"
+        try {
+            FileOutputStream(f, true).use { it.write(stamped.toByteArray()) }
+        } catch (_: Exception) {
         }
     }
 }

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import tempfile
 import wave
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,13 @@ _CHANNELS = 1
 _SAMPLE_WIDTH = 2
 
 
+@dataclass(frozen=True)
+class TranscriptionResult:
+    text: str
+    duration_ms: int
+    avg_logprob: float | None
+
+
 async def run_audio_analysis(
     job_id: str,
     memory_id: str,
@@ -32,7 +40,8 @@ async def run_audio_analysis(
     audio_paths: list[str] = inputs.get("audio_paths") or []
     log.info("开始语音分析 job=%s memory=%s 音频块数=%d", job_id, memory_id, len(audio_paths))
     try:
-        transcript = await _transcribe_all(audio_paths, log)
+        transcription = await transcribe_pcm(audio_paths)
+        transcript = transcription.text
         log.info(
             "语音转写完成 job=%s memory=%s 文本长度=%d 文本=%r",
             job_id, memory_id, len(transcript), transcript,
@@ -51,24 +60,39 @@ async def run_audio_analysis(
 
 async def _transcribe_all(audio_paths: list[str], log) -> str:
     """把所有 PCM 音频块合并成一段 WAV，只调用一次 ASR，返回全量转写文本。"""
+    return (await transcribe_pcm(audio_paths, log=log)).text
+
+
+async def transcribe_pcm(
+    audio_paths: list[str],
+    sample_rate: int = _SAMPLE_RATE,
+    channels: int = _CHANNELS,
+    sample_width: int = _SAMPLE_WIDTH,
+    log=None,
+) -> TranscriptionResult:
+    """Combine PCM files, call Whisper once, and preserve ASR confidence metadata."""
     if not audio_paths:
-        return ""
+        return TranscriptionResult(text="", duration_ms=0, avg_logprob=None)
     pcm = bytearray()
     for p in audio_paths:
         try:
             pcm += Path(p).read_bytes()
         except OSError as e:
-            log.warning("读取音频块失败 %s: %s", p, e)
+            if log:
+                log.warning("读取音频块失败 %s: %s", p, e)
     if not pcm:
-        return ""
+        return TranscriptionResult(text="", duration_ms=0, avg_logprob=None)
+
+    bytes_per_second = sample_rate * channels * sample_width
+    duration_ms = int(len(pcm) / bytes_per_second * 1000)
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         wav_path = tmp.name
     try:
         with wave.open(wav_path, "wb") as w:
-            w.setnchannels(_CHANNELS)
-            w.setsampwidth(_SAMPLE_WIDTH)
-            w.setframerate(_SAMPLE_RATE)
+            w.setnchannels(channels)
+            w.setsampwidth(sample_width)
+            w.setframerate(sample_rate)
             w.writeframes(bytes(pcm))
 
         settings = get_settings()
@@ -85,6 +109,34 @@ async def _transcribe_all(audio_paths: list[str], log) -> str:
         texts = [t for t in texts if t]
         if not texts and data.get("text"):
             texts = [data["text"].strip()]
-        return " ".join(texts).strip()
+        return TranscriptionResult(
+            text=" ".join(texts).strip(),
+            duration_ms=duration_ms,
+            avg_logprob=_weighted_avg_logprob(segments),
+        )
     finally:
         Path(wav_path).unlink(missing_ok=True)
+
+
+def _weighted_avg_logprob(segments: list[dict]) -> float | None:
+    weighted_sum = 0.0
+    total_weight = 0.0
+    fallback: list[float] = []
+    for segment in segments:
+        value = segment.get("avg_logprob")
+        if not isinstance(value, (int, float)):
+            continue
+        numeric = float(value)
+        fallback.append(numeric)
+        start = segment.get("start")
+        end = segment.get("end")
+        if isinstance(start, (int, float)) and isinstance(end, (int, float)):
+            weight = max(float(end) - float(start), 0.0)
+            if weight > 0.0:
+                weighted_sum += numeric * weight
+                total_weight += weight
+    if total_weight > 0.0:
+        return weighted_sum / total_weight
+    if fallback:
+        return sum(fallback) / len(fallback)
+    return None

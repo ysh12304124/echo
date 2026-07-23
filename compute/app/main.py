@@ -9,13 +9,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI
+from pathlib import Path
+
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from app.analyze.audio import run_audio_analysis
+from app.analyze.audio import run_audio_analysis, transcribe_pcm
 from app.analyze.space_memory import run_space_analysis
 from app.analyze.time_memory import run_time_analysis
 from app.logging_setup import get_logger, setup_logging
+from app.settings import get_settings
 
 setup_logging()
 log = get_logger("main")
@@ -38,6 +41,19 @@ class AnalyzeRequest(BaseModel):
 
 class AnalyzeAck(BaseModel):
     job_id: str
+
+
+class TranscribeRequest(BaseModel):
+    audio_path: str
+    sample_rate_hz: int = Field(default=16000, ge=8000, le=48000)
+    channels: int = Field(default=1, ge=1, le=2)
+    sample_width_bytes: int = Field(default=2, ge=1, le=4)
+
+
+class TranscribeResponse(BaseModel):
+    text: str
+    duration_ms: int
+    avg_logprob: float | None = None
 
 
 @app.post("/analyze/audio", response_model=AnalyzeAck, status_code=202)
@@ -71,6 +87,48 @@ async def analyze_space(req: AnalyzeRequest, background: BackgroundTasks) -> Ana
         run_space_analysis, req.job_id, req.memory_id, req.session_id, req.inputs, req.callback_url
     )
     return AnalyzeAck(job_id=req.job_id)
+
+
+@app.post("/transcribe", response_model=TranscribeResponse)
+async def transcribe(
+    req: TranscribeRequest,
+    x_internal_token: str | None = Header(default=None),
+) -> TranscribeResponse:
+    settings = get_settings()
+    if x_internal_token != settings.internal_token:
+        raise HTTPException(401, "Invalid internal token")
+    if (req.sample_rate_hz, req.channels, req.sample_width_bytes) != (16000, 1, 2):
+        raise HTTPException(400, "Only 16kHz mono 16-bit PCM is supported")
+
+    root = Path(settings.shared_blob_root).resolve()
+    audio_path = Path(req.audio_path).resolve()
+    try:
+        audio_path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(403, "Audio path is outside the shared blob root") from exc
+    if not audio_path.is_file():
+        raise HTTPException(404, "Audio file not found")
+
+    size = audio_path.stat().st_size
+    if size == 0 or size % req.sample_width_bytes != 0:
+        raise HTTPException(400, "Invalid PCM payload")
+    duration_seconds = size / (
+        req.sample_rate_hz * req.channels * req.sample_width_bytes
+    )
+    if duration_seconds > settings.max_voice_query_seconds:
+        raise HTTPException(400, "Audio duration exceeds configured maximum")
+
+    result = await transcribe_pcm(
+        [str(audio_path)],
+        sample_rate=req.sample_rate_hz,
+        channels=req.channels,
+        sample_width=req.sample_width_bytes,
+    )
+    return TranscribeResponse(
+        text=result.text,
+        duration_ms=result.duration_ms,
+        avg_logprob=result.avg_logprob,
+    )
 
 
 @app.get("/health")

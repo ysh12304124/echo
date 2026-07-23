@@ -2,16 +2,28 @@ from __future__ import annotations
 
 import json
 from typing import Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.enums import BindingType, DataPartition, MemoryStatus, MemoryType, TimeScene
+from app.domain.enums import (
+    BindingType,
+    DataPartition,
+    MemoryStatus,
+    MemoryType,
+    QueryScope,
+    TimeScene,
+)
 from app.domain.models import ImuSample, NavigationSummary, SpaceMemory, TimeMemory
 from app.providers import get_provider_factory, get_settings
+from app.providers.base import (
+    RerankerUnavailable,
+    VectorIndexMismatch,
+    VisualEmbeddingUnavailable,
+)
 from app.repositories.database import get_db
 from app.repositories.memory_repo import MemoryRepository
 from app.schemas import (
@@ -43,9 +55,18 @@ from app.schemas import (
     UpdatePersonRequest,
     UpdateSpaceRequest,
     UploadAckResponse,
+    VoiceTranscriptionResponse,
+    VoiceQueryResponse,
 )
 from app.logging_setup import get_logger
-from app.services.compute_client import apply_audio_result, apply_space_result, apply_time_result
+from app.services.compute_client import (
+    ComputeTranscriptionTimeout,
+    ComputeTranscriptionUnavailable,
+    apply_audio_result,
+    apply_space_result,
+    apply_time_result,
+    get_compute_client,
+)
 from app.services.ingest_pipeline import IngestPipeline
 from app.services.person_service import PersonService
 from app.services.query_engine import QueryEngine
@@ -394,12 +415,14 @@ async def delete_memory(memory_id: UUID, repo: MemoryRepository = Depends(get_re
     factory = get_provider_factory()
     blob = factory.blob_store()
     vector = factory.vector_store()
+    visual_vector = factory.visual_vector_store()
     for ev in await repo.list_evidences(memory_id):
         if ev.media_path:
             key = ev.media_path.split("/blobs/", 1)[-1]
             await blob.delete(key)
     try:
         await vector.delete_by_filter({"memory_id": str(memory_id)})
+        await visual_vector.delete_by_filter({"memory_id": str(memory_id)})
     except NotImplementedError:
         pass
     await repo.delete_time_memory(memory_id)
@@ -593,7 +616,17 @@ async def get_media(key: str):
 async def query(req: QueryRequest, repo: MemoryRepository = Depends(get_repo)):
     engine = QueryEngine(repo)
     log.info("查询请求 scope=%s q=%r", req.scope.value, req.question)
-    result = await engine.query(req.question, req.scope, req.memory_id, req.space_id)
+    try:
+        result = await engine.query(req.question, req.scope, req.memory_id, req.space_id)
+    except RerankerUnavailable as exc:
+        log.error("reranker 不可用: %s", exc)
+        raise HTTPException(503, "Reranker service unavailable") from exc
+    except VectorIndexMismatch as exc:
+        log.error("向量索引与 Embedding 配置不一致: %s", exc)
+        raise HTTPException(503, "Embedding index requires rebuild") from exc
+    except VisualEmbeddingUnavailable as exc:
+        log.error("Chinese-CLIP 不可用: %s", exc)
+        raise HTTPException(503, "Visual embedding service unavailable") from exc
     log.info(
         "查询返回 query=%s status=%s evidences=%d answer=%r",
         result.query_id,
@@ -602,6 +635,108 @@ async def query(req: QueryRequest, repo: MemoryRepository = Depends(get_repo)):
         (result.answer or "")[:80],
     )
     return result
+
+
+async def _transcribe_voice_upload(file: UploadFile) -> VoiceTranscriptionResponse:
+    settings = get_settings()
+    data = await file.read()
+    max_bytes = settings.voice_query_max_seconds * 16000 * 1 * 2
+    if not data:
+        raise HTTPException(400, "Audio file is empty")
+    if len(data) % 2 != 0:
+        raise HTTPException(400, "Audio must be 16-bit PCM")
+    if len(data) > max_bytes:
+        raise HTTPException(400, "Audio duration exceeds 60 seconds")
+    duration_ms = round(len(data) / (16000 * 1 * 2) * 1000)
+    if duration_ms < round(settings.voice_query_min_seconds * 1000):
+        return VoiceTranscriptionResponse(
+            duration_ms=duration_ms,
+            asr_accepted=False,
+            rejection_reason="语音太短，请长按并说完整问题",
+        )
+
+    blob = get_provider_factory().blob_store()
+    key = f"query-audio/{uuid4()}.pcm"
+    path = await blob.save(key, data, "audio/pcm")
+    try:
+        try:
+            transcription = await get_compute_client().transcribe(path)
+        except ComputeTranscriptionTimeout as exc:
+            raise HTTPException(504, "ASR service timed out") from exc
+        except ComputeTranscriptionUnavailable as exc:
+            raise HTTPException(503, "ASR service unavailable") from exc
+
+        transcript = (transcription.get("text") or "").strip()
+        avg_logprob = transcription.get("avg_logprob")
+        if avg_logprob is not None:
+            avg_logprob = float(avg_logprob)
+        accepted = bool(transcript) and (
+            avg_logprob is None or avg_logprob >= settings.asr_min_avg_logprob
+        )
+        if not accepted:
+            reason = (
+                "没听清，请再说一次"
+                if not transcript
+                else "语音识别置信度不足，请说清楚后重试"
+            )
+            return VoiceTranscriptionResponse(
+                transcript=transcript,
+                duration_ms=duration_ms,
+                asr_avg_logprob=avg_logprob,
+                asr_accepted=False,
+                rejection_reason=reason,
+            )
+
+        return VoiceTranscriptionResponse(
+            transcript=transcript,
+            duration_ms=duration_ms,
+            asr_avg_logprob=avg_logprob,
+            asr_accepted=True,
+        )
+    finally:
+        await blob.delete(key)
+
+
+@router.post("/query/voice/transcribe", response_model=VoiceTranscriptionResponse)
+async def transcribe_voice(file: UploadFile = File(...)):
+    return await _transcribe_voice_upload(file)
+
+
+@router.post("/query/voice", response_model=VoiceQueryResponse)
+async def voice_query(
+    file: UploadFile = File(...),
+    repo: MemoryRepository = Depends(get_repo),
+):
+    transcription = await _transcribe_voice_upload(file)
+    if not transcription.asr_accepted:
+        return VoiceQueryResponse(
+            transcript=transcription.transcript,
+            duration_ms=transcription.duration_ms,
+            asr_avg_logprob=transcription.asr_avg_logprob,
+            asr_accepted=False,
+            rejection_reason=transcription.rejection_reason,
+        )
+
+    try:
+        result = await QueryEngine(repo).query(
+            transcription.transcript, QueryScope.GLOBAL_WORK
+        )
+    except RerankerUnavailable as exc:
+        log.error("语音查询 reranker 不可用: %s", exc)
+        raise HTTPException(503, "Reranker service unavailable") from exc
+    except VectorIndexMismatch as exc:
+        log.error("语音查询向量索引与 Embedding 配置不一致: %s", exc)
+        raise HTTPException(503, "Embedding index requires rebuild") from exc
+    except VisualEmbeddingUnavailable as exc:
+        log.error("语音查询 Chinese-CLIP 不可用: %s", exc)
+        raise HTTPException(503, "Visual embedding service unavailable") from exc
+    return VoiceQueryResponse(
+        transcript=transcription.transcript,
+        duration_ms=transcription.duration_ms,
+        asr_avg_logprob=transcription.asr_avg_logprob,
+        asr_accepted=True,
+        result=result,
+    )
 
 
 # --- Persons ---

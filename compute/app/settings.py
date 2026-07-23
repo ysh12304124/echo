@@ -23,6 +23,8 @@ class ComputeSettings(BaseSettings):
     asr_model: str = "whisper-1"
     asr_api_key: str = "not-needed"
     asr_language: Optional[str] = "zh"
+    shared_blob_root: str = "../backend/data/blobs"
+    max_voice_query_seconds: int = 60
 
 
 @lru_cache

@@ -2,7 +2,12 @@ package com.echo.phone.ui
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
@@ -12,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -23,6 +29,7 @@ import com.echo.phone.domain.DataPartition
 import com.echo.phone.ui.home.HomeScreen
 import com.echo.phone.ui.memory.MemoryDetailScreen
 import com.echo.phone.ui.mine.DeviceScreen
+import com.echo.phone.ui.mine.DiagnosticsLogScreen
 import com.echo.phone.ui.mine.HelpScreen
 import com.echo.phone.ui.mine.MineScreen
 import com.echo.phone.ui.mine.StorageScreen
@@ -47,7 +54,13 @@ fun EchoApp() {
     val context = LocalContext.current
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
-    val showBottomBar = currentRoute in tabs.map { it.route }
+    val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val showBottomBar = currentRoute in tabs.map { it.route } && !keyboardVisible
+    val contentInsets = if (keyboardVisible) {
+        WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+    } else {
+        ScaffoldDefaults.contentWindowInsets
+    }
     val startDestination = if (PermissionManager.allGranted(context)) Routes.HOME else Routes.ONBOARDING
 
     // 启动页 → 主界面
@@ -58,6 +71,7 @@ fun EchoApp() {
     }
 
     Scaffold(
+        contentWindowInsets = contentInsets,
         bottomBar = {
             if (showBottomBar) {
                 NavigationBar {
@@ -106,6 +120,7 @@ fun EchoApp() {
                     onNavigateDevice = { navController.navigate(Routes.DEVICE) },
                     onNavigateStorage = { navController.navigate(Routes.STORAGE) },
                     onNavigateHelp = { navController.navigate(Routes.HELP) },
+                    onNavigateDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
                     onNavigateFavorites = { navController.navigate(Routes.FAVORITES) },
                 )
             }
@@ -124,6 +139,7 @@ fun EchoApp() {
             composable(Routes.DEVICE) { DeviceScreen(onBack = { navController.popBackStack() }) }
             composable(Routes.STORAGE) { StorageScreen(onBack = { navController.popBackStack() }) }
             composable(Routes.HELP) { HelpScreen(onBack = { navController.popBackStack() }) }
+            composable(Routes.DIAGNOSTICS) { DiagnosticsLogScreen(onBack = { navController.popBackStack() }) }
             composable(Routes.QUALITY_TIME) {
                 HomeScreen(partitionFilter = DataPartition.QUALITY_TIME, title = "Quality Time", onNavigateMemory = { id -> navController.navigate(Routes.memoryDetail(id)) }, onNavigateSpace = { id -> navController.navigate(Routes.spaceDetail(id)) })
             }

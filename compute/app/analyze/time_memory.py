@@ -11,6 +11,9 @@ from typing import Any
 
 from app.callback import send_callback
 from app.logging_setup import get_session_logger
+from pathlib import Path
+import asyncio, os
+from functools import partial
 
 
 async def run_time_analysis(
@@ -28,6 +31,31 @@ async def run_time_analysis(
         job_id, memory_id, video_path, len(audio_paths),
     )
 
+
+    if video_path and Path(video_path).is_file():
+        out_dir = Path(__file__).resolve().parent / "outputs" / "emotion_keyframe_output"
+        echo_root = Path(__file__).resolve().parent.parent.parent.parent  # → D:\echo
+        face_db_path = str(echo_root / "backend" / "data" / "faceDataBase")
+        os.makedirs(str(out_dir), exist_ok=True)
+        from deepface import DeepFace
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            partial(
+                DeepFace.stream,
+                db_path=face_db_path,
+                source=video_path,
+                detector_backend="scrfd",
+                anti_spoofing=True,
+                enable_face_analysis=True,
+                time_threshold=0,
+                frame_threshold=1,
+                keyframe_output_dir=str(out_dir),
+            ),
+        )
+        log.info("人脸分析完成 job=%s", job_id)
+    else:
+        log.warning("video_path 无效 job=%s", job_id)
     # TODO(阶段四): 接入人脸检测/识别 + YOLO 关键帧/事件 + VLM 总结的真实模型链路。
     result = {
         "identify_brief": "时间记忆分析(桩)：已收到视频与语音输入，尚未接入真实模型",

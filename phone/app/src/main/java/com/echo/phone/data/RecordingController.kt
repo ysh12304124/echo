@@ -31,8 +31,27 @@ private data class InlineSpaceSession(
     val sceneType: SpaceSceneType,
     val cacheFile: File,
     val raf: RandomAccessFile,
-    var uploaded: Boolean = false,
+    var closed: Boolean = false,
+    var finalizing: Boolean = false,
+    var finalized: Boolean = false,
 )
+
+/** 用眼镜端提供的绝对 offset 覆盖 MP4 的最终头部，保留 offset 之前的 ftyp/free。 */
+internal fun applyVideoPatch(raf: RandomAccessFile, offset: Long, bytes: ByteArray) {
+    require(offset >= 0) { "video patch offset must be non-negative" }
+    raf.seek(offset)
+    raf.write(bytes)
+}
+
+/** 将视频尾部分片追加到缓存文件末尾。调用方负责保证文件处于可写状态。 */
+internal fun appendVideoChunk(raf: RandomAccessFile, bytes: ByteArray) {
+    raf.seek(raf.length())
+    raf.write(bytes)
+}
+
+/** SPACE 本地文件只有拿到最终头部且收到视频结束标志后才允许 finalize。 */
+internal fun canFinalizeSpace(headerPatchReceived: Boolean, videoDone: Boolean): Boolean =
+    headerPatchReceived && videoDone
 
 /**
  * 记忆录制编排：场景 START 后同时收集视频分片(不落地转发)、手机麦克风音频、IMU(空间记忆开启时)。
@@ -60,6 +79,7 @@ class RecordingController(
     @Volatile private var spaceUsedInSession = false
     @Volatile private var uploadBarVisible = false
     private val pendingUploads = AtomicInteger(0)
+    private val pendingVideoUploads = AtomicInteger(0)
     private val pendingAudioUploads = AtomicInteger(0)
     private val pendingImuUploads = AtomicInteger(0)
 
@@ -71,6 +91,12 @@ class RecordingController(
 
     /** 旁路 SPACE 会话(TIME 录制中用户开启 SPACE):后续分片同步落本地,结束时上传。 */
     @Volatile private var inlineSpace: InlineSpaceSession? = null
+
+    /** SPACE UI 已结束但整体 TIME 视频尚未 finalize 时保留的会话。 */
+    @Volatile private var pendingSpace: InlineSpaceSession? = null
+
+    /** 最近收到视频事件的时间，用于覆盖眼镜端 video_end 后仍到达的尾部 chunk。 */
+    @Volatile private var lastVideoChunkAtNanos: Long = 0L
 
     private val _uploadStatus = MutableStateFlow(UploadStatus())
     val uploadStatus: StateFlow<UploadStatus> = _uploadStatus.asStateFlow()
@@ -109,6 +135,9 @@ class RecordingController(
         uploadBarVisible = true
         mp4HeaderCache = null
         headerPatchReceived = false
+        pendingSpace = null
+        lastVideoChunkAtNanos = 0L
+        pendingVideoUploads.set(0)
         pendingAudioUploads.set(0)
         pendingImuUploads.set(0)
         publishUploadStatus()
@@ -152,20 +181,24 @@ class RecordingController(
                 when (chunk) {
                     is VideoChunk.Data -> {
                         if (glassSid != null && chunk.streamId != glassSid) return@collect
+                        markVideoChunkReceived()
                         if (chunk.index == 0) mp4HeaderCache = chunk.bytes
-                        uploadVideoSequential { repo.uploadVideoChunk(id, chunk.index, false, null, chunk.bytes) }
                         appendInlineSpace(chunk.bytes)
+                        uploadVideoSequential { repo.uploadVideoChunk(id, chunk.index, false, null, chunk.bytes) }
                     }
                     is VideoChunk.Patch -> {
                         if (glassSid != null && chunk.streamId != glassSid) return@collect
-                        mp4HeaderCache = chunk.bytes
-                        headerPatchReceived = true
+                        markVideoChunkReceived()
                         EchoLog.i("收到 header patch offset=${chunk.offset} size=${chunk.bytes.size}")
-                        uploadVideoSequential { repo.patchVideoHeader(id, chunk.offset, chunk.bytes) }
+                        // 先把 patch 写入本地 SPACE 缓存，再释放等待方；否则 stopSpace
+                        // 可能看到标志后抢先关闭并上传未写入 moov 的文件。
                         patchInlineSpace(chunk.offset, chunk.bytes)
+                        headerPatchReceived = true
+                        uploadVideoSequential { repo.patchVideoHeader(id, chunk.offset, chunk.bytes) }
                     }
                     is VideoChunk.End -> {
                         if (glassSid != null && chunk.streamId != glassSid) return@collect
+                        markVideoChunkReceived()
                         uploadVideoSequential { repo.uploadVideoChunk(id, -1, true, chunk.filename, ByteArray(0)) }
                         videoDone = true
                         publishUploadStatus()
@@ -176,34 +209,56 @@ class RecordingController(
         }
     }
 
+    private fun markVideoChunkReceived() {
+        lastVideoChunkAtNanos = System.nanoTime()
+    }
+
     /** 把分片 append 到旁路 SPACE 本地缓存(若活跃)。 */
     private fun appendInlineSpace(bytes: ByteArray) {
-        val s = inlineSpace ?: return
+        val s = inlineSpace ?: pendingSpace ?: return
         runCatching {
             synchronized(s) {
-                s.raf.seek(s.raf.length())
-                s.raf.write(bytes)
+                appendVideoChunk(s.raf, bytes)
             }
         }.onFailure { EchoLog.e("旁路 SPACE 缓存写入失败: ${it.message}", it) }
     }
 
     /** 把 patch 应用到旁路 SPACE 本地缓存(若活跃)。 */
     private fun patchInlineSpace(offset: Long, bytes: ByteArray) {
-        val s = inlineSpace ?: return
+        val s = inlineSpace ?: pendingSpace ?: return
         runCatching {
             synchronized(s) {
                 val fileLen = s.raf.length()
                 EchoLog.i("旁路 SPACE 收到 patch offset=$offset len=${bytes.size} 当前文件长度=$fileLen session=${s.sessionId}")
-                s.raf.seek(offset)
-                s.raf.write(bytes)
+                applyVideoPatch(s.raf, offset, bytes)
             }
         }.onFailure { EchoLog.e("旁路 SPACE 缓存 patch 失败: ${it.message}", it) }
     }
 
     private suspend fun uploadVideoSequential(block: suspend () -> Unit) {
         pendingUploads.incrementAndGet()
+        pendingVideoUploads.incrementAndGet()
         try { block() } catch (e: Exception) { EchoLog.e("视频分片上传失败: ${e.message}", e) }
-        finally { pendingUploads.decrementAndGet() }
+        finally {
+            pendingUploads.decrementAndGet()
+            pendingVideoUploads.decrementAndGet()
+        }
+    }
+
+    /** 等待视频结束、patch 上传完成，并给乱序到达的尾部 chunk 留出落盘时间。 */
+    private suspend fun waitForSpaceVideoReady(timeoutMs: Long): Boolean {
+        return withTimeoutOrNull(timeoutMs) {
+            while (true) {
+                val lastChunkAt = lastVideoChunkAtNanos
+                val quietEnough = lastChunkAt != 0L &&
+                    System.nanoTime() - lastChunkAt >= SPACE_VIDEO_TAIL_SETTLE_NANOS
+                if (canFinalizeSpace(headerPatchReceived, videoDone) &&
+                    pendingVideoUploads.get() == 0 && quietEnough
+                ) break
+                delay(50)
+            }
+            true
+        } ?: false
     }
 
     private fun startMic(id: String) {
@@ -246,9 +301,13 @@ class RecordingController(
         glasses.stopRecording()
         mic.stop()
 
+        var pendingSpaceVideoReady = pendingSpace == null
         withTimeoutOrNull(UPLOAD_DRAIN_TIMEOUT_MS) {
             delay(300) // 留出时间让麦克风尾块/眼镜尾部视频分片进入上传队列
             while (!videoDone || pendingUploads.get() > 0) delay(100)
+            if (pendingSpace != null) {
+                pendingSpaceVideoReady = waitForSpaceVideoReady(UPLOAD_DRAIN_TIMEOUT_MS)
+            }
         } ?: EchoLog.w("等待视频/音频上传排空超时 session=$id videoDone=$videoDone pending=${pendingUploads.get()}")
 
         imuJob?.cancelAndJoin(); imuJob = null
@@ -256,6 +315,15 @@ class RecordingController(
         micJob?.cancelAndJoin(); micJob = null
         micStopped = true
         imuStopped = true
+
+        // SPACE 可能已经在 UI 上结束，但要等整体 TIME 视频的最终 patch 到达后才能完成。
+        pendingSpace?.let { space ->
+            if (pendingSpaceVideoReady && canFinalizeSpace(headerPatchReceived, videoDone)) {
+                finalizePendingSpace(space)
+            } else {
+                EchoLog.e("TIME 结束时仍未收到 header patch，保留 SPACE 缓存未上传 session=${space.sessionId}")
+            }
+        }
 
         val tailImu = synchronized(imuBatchLock) {
             pendingImuBatch.toList().also { pendingImuBatch.clear() }
@@ -303,9 +371,11 @@ class RecordingController(
      * 结束旁路 SPACE 录制:关闭本地缓存,把本地文件按分片 POST 到 SPACE 会话,complete。
      * 返回 complete 后的 MemorySummary。
      */
-    suspend fun stopSpace(): MemorySummary {
+    suspend fun stopSpace(): MemorySummary? {
         val s = inlineSpace ?: throw IllegalStateException("当前无旁路 SPACE 录制")
+        s.closed = true
         inlineSpace = null
+        pendingSpace = s
 
         // 等待眼镜端发送 header patch(真正的 moov box)，最多等待 3 秒。
         // 眼镜端在 STOP 后才发送 patch，用户可能在 patch 到达前就点击"结束空间记忆"。
@@ -317,48 +387,66 @@ class RecordingController(
                 waited += 100
             }
             if (!headerPatchReceived) {
-                EchoLog.e("等待 header patch 超时，视频可能损坏 session=${s.sessionId}")
+                EchoLog.w("等待 header patch 超时，延迟 SPACE 上传到 TIME 结束 session=${s.sessionId}")
+                return null
             } else {
                 EchoLog.i("header patch 已到达，等待时长=${waited}ms session=${s.sessionId}")
             }
         }
 
-        // 在关闭文件前，用最新的 header patch 覆盖文件头部。
-        runCatching {
+        if (!waitForSpaceVideoReady(SPACE_VIDEO_READY_TIMEOUT_MS)) {
+            EchoLog.w("等待视频结束或尾部分片排空超时，延迟 SPACE 上传到 TIME 结束 session=${s.sessionId}")
+            return null
+        }
+
+        return finalizePendingSpace(s)
+    }
+
+    /** 仅在最终 patch 已写入缓存后关闭、上传并完成待处理 SPACE。 */
+    private suspend fun finalizePendingSpace(s: InlineSpaceSession): MemorySummary {
+        synchronized(s) {
+            if (s.finalized) throw IllegalStateException("SPACE 会话已完成 session=${s.sessionId}")
+            if (s.finalizing) throw IllegalStateException("SPACE 会话正在完成 session=${s.sessionId}")
+            s.finalizing = true
+        }
+
+        try {
             synchronized(s) {
-                mp4HeaderCache?.let { header ->
-                    s.raf.seek(0)
-                    s.raf.write(header)
-                    s.raf.fd.sync() // 强制刷盘,确保后续 inputStream 能读到更新后的 header
-                    EchoLog.i("旁路 SPACE 覆盖文件头 ${header.size} bytes session=${s.sessionId}")
-                }
+                s.raf.fd.sync()
                 s.raf.close()
             }
-        }.onFailure { EchoLog.e("旁路 SPACE 文件头覆盖失败: ${it.message}", it) }
-
-        // 分片上传本地缓存(避免一次性读入内存)。逐 chunk 串行 POST。
-        val filename = "space_${s.sessionId}.mp4"
-        val buf = ByteArray(SPACE_UPLOAD_CHUNK_BYTES)
-        s.cacheFile.inputStream().use { input ->
-            var idx = 0
-            while (true) {
-                val n = input.read(buf)
-                if (n <= 0) break
-                val bytes = if (n == buf.size) buf else buf.copyOf(n)
-                repo.uploadVideoChunk(s.sessionId, idx, isLast = false, filename = null, bytes = bytes)
-                idx++
+            // 分片上传本地缓存(避免一次性读入内存)。逐 chunk 串行 POST。
+            val filename = "space_${s.sessionId}.mp4"
+            val buf = ByteArray(SPACE_UPLOAD_CHUNK_BYTES)
+            s.cacheFile.inputStream().use { input ->
+                var idx = 0
+                while (true) {
+                    val n = input.read(buf)
+                    if (n <= 0) break
+                    val bytes = if (n == buf.size) buf else buf.copyOf(n)
+                    repo.uploadVideoChunk(s.sessionId, idx, isLast = false, filename = null, bytes = bytes)
+                    idx++
+                }
+                // 末片:空字节 + isLast=true + filename,后端收到后 rename。
+                repo.uploadVideoChunk(s.sessionId, -1, isLast = true, filename = filename, bytes = ByteArray(0))
             }
-            // 末片:空字节 + isLast=true + filename,后端收到后 rename。
-            repo.uploadVideoChunk(s.sessionId, -1, isLast = true, filename = filename, bytes = ByteArray(0))
+            EchoLog.i("旁路 SPACE 视频已上传 session=${s.sessionId} size=${s.cacheFile.length()} bytes")
+            val summary = repo.completeSession(s.sessionId)
+            synchronized(s) { s.finalized = true }
+            if (pendingSpace === s) pendingSpace = null
+            return summary
+        } finally {
+            synchronized(s) { s.finalizing = false }
+            runCatching { s.raf.close() }
+            runCatching { s.cacheFile.delete() }
         }
-        EchoLog.i("旁路 SPACE 视频已上传 session=${s.sessionId} size=${s.cacheFile.length()} bytes")
-        runCatching { s.cacheFile.delete() }
-        return repo.completeSession(s.sessionId)
     }
 
     private companion object {
         const val UPLOAD_DRAIN_TIMEOUT_MS = 15_000L
         const val UPLOAD_BAR_LINGER_MS = 2_000L
+        const val SPACE_VIDEO_READY_TIMEOUT_MS = 3_000L
+        const val SPACE_VIDEO_TAIL_SETTLE_NANOS = 500_000_000L
         const val SPACE_UPLOAD_CHUNK_BYTES = 1 * 1024 * 1024 // 1MB
     }
 }

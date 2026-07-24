@@ -49,6 +49,24 @@ class EchoRepository(private val api: EchoApiService) {
         return resp.toDomain()
     }
 
+    suspend fun queryVoice(audio: ByteArray): VoiceQueryResult {
+        val part = MultipartBody.Part.createFormData(
+            "file",
+            "query.pcm",
+            audio.toRequestBody("audio/pcm".toMediaType()),
+        )
+        return api.queryVoice(part).toDomain()
+    }
+
+    suspend fun transcribeVoice(audio: ByteArray): VoiceTranscriptionResult {
+        val part = MultipartBody.Part.createFormData(
+            "file",
+            "query.pcm",
+            audio.toRequestBody("audio/pcm".toMediaType()),
+        )
+        return api.transcribeVoice(part).toDomain()
+    }
+
     suspend fun listPersons(partition: DataPartition? = null): List<PersonSummary> {
         return api.listPersons(partition = partition?.name?.lowercase()).items.map { it.toDomain() }
     }

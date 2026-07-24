@@ -179,9 +179,9 @@ class EchoApplication : Application() {
 
     /** phone 首页"结束 SPACE"按钮入口:关闭本地缓存,上传到 SPACE 会话,complete。 */
     suspend fun stopInlineSpace(): Result<Unit> = runCatching {
-        recordingController.stopSpace()
+        val summary = recordingController.stopSpace()
         _inlineSpaceActive.value = false
-        _recordingCompleted.emit(Unit) // 让首页刷新
+        if (summary != null) _recordingCompleted.emit(Unit) // patch 已到达并完成时刷新
     }.onFailure {
         _inlineSpaceActive.value = false
         EchoLog.e("结束旁路 SPACE 失败: ${it.message}", it)

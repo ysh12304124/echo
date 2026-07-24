@@ -26,25 +26,146 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.echo.phone.EchoApplication
+import com.echo.phone.data.VoiceQueryRecorder
 import com.echo.phone.domain.*
+import com.echo.phone.util.EchoLog
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
+import java.io.IOException
 
-class QueryViewModel(private val repo: com.echo.phone.data.EchoRepository) : ViewModel() {
+enum class VoicePhase { IDLE, RECORDING, TRANSCRIBING, SEARCHING }
+
+class QueryViewModel(
+    private val repo: com.echo.phone.data.EchoRepository,
+    private val recorder: VoiceQueryRecorder = VoiceQueryRecorder(),
+) : ViewModel() {
     var question by mutableStateOf("")
     var scope by mutableStateOf(QueryScope.GLOBAL_WORK)
     var result by mutableStateOf<QueryResult?>(null)
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
+    var notice by mutableStateOf<String?>(null)
+    var voicePhase by mutableStateOf(VoicePhase.IDLE)
+    var recordingSeconds by mutableStateOf(0)
+
+    private var recordingJob: Job? = null
+    private var finishing = false
+    private var startedAtMs = 0L
 
     fun submit() {
-        if (question.isBlank()) return
+        if (question.isBlank() || loading || voicePhase != VoicePhase.IDLE) return
         viewModelScope.launch {
-            loading = true; error = null
-            try { result = repo.query(question, scope, null, null) }
-            catch (e: Exception) { error = e.message }
-            loading = false
+            loading = true
+            error = null
+            notice = null
+            try {
+                result = repo.query(question.trim(), scope, null, null)
+            } catch (e: Exception) {
+                error = e.message
+            } finally {
+                loading = false
+            }
         }
+    }
+
+    fun startVoiceRecording(): Boolean {
+        if (loading || voicePhase != VoicePhase.IDLE || finishing) return false
+        val started = try { recorder.start() } catch (error: Throwable) {
+            EchoLog.e("语音查询录音启动异常: ${error.message}", error)
+            false
+        }
+        if (!started) {
+            error = "无法启动麦克风，请检查录音权限"
+            return false
+        }
+        error = null
+        notice = null
+        result = null
+        recordingSeconds = 0
+        finishing = false
+        startedAtMs = android.os.SystemClock.elapsedRealtime()
+        voicePhase = VoicePhase.RECORDING
+        recordingJob?.cancel()
+        recordingJob = viewModelScope.launch {
+            while (voicePhase == VoicePhase.RECORDING) {
+                recordingSeconds = ((android.os.SystemClock.elapsedRealtime() - startedAtMs) / 1000L).toInt()
+                if (recordingSeconds >= VoiceQueryRecorder.MAX_SECONDS) {
+                    finishVoiceRecording(false)
+                    break
+                }
+                delay(100)
+            }
+        }
+        return true
+    }
+
+    fun finishVoiceRecording(cancel: Boolean) {
+        if (voicePhase != VoicePhase.RECORDING || finishing) return
+        finishing = true
+        recordingJob?.cancel()
+        recordingJob = null
+        if (cancel) {
+            voicePhase = VoicePhase.IDLE
+            notice = null
+            viewModelScope.launch {
+                try { recorder.cancelAndDiscard() } catch (error: Throwable) {
+                    EchoLog.e("语音查询取消清理异常: ${error.message}", error)
+                } finally {
+                    finishing = false
+                }
+            }
+            return
+        }
+
+        voicePhase = VoicePhase.TRANSCRIBING
+        loading = true
+        viewModelScope.launch {
+            try {
+                val audio = recorder.stop()
+                if (audio.isEmpty()) {
+                    notice = "没有采集到语音，请重试"
+                    return@launch
+                }
+                if (audio.size < VoiceQueryRecorder.MIN_BYTES) {
+                    notice = "语音太短，请长按并说完整问题"
+                    return@launch
+                }
+                val transcription = repo.transcribeVoice(audio)
+                val query = transcription.transcript.trim()
+                if (!transcription.asrAccepted || query.isBlank()) {
+                    notice = transcription.rejectionReason ?: "没听清，请再说一次"
+                    return@launch
+                }
+                question = query
+                voicePhase = VoicePhase.SEARCHING
+                result = repo.query(query, scope, null, null)
+            } catch (exception: Exception) {
+                EchoLog.e("语音查询失败: ${exception.message}", exception)
+                error = userFacingQueryError(exception)
+            } finally {
+                voicePhase = VoicePhase.IDLE
+                loading = false
+                finishing = false
+            }
+        }
+    }
+
+    private fun userFacingQueryError(exception: Exception): String {
+        if (exception is IOException) return "网络连接失败，请检查网络后重试"
+        return when ((exception as? HttpException)?.code()) {
+            400 -> "语音格式不正确，请重新录制"
+            503 -> "语音识别服务暂时不可用，请稍后重试"
+            504 -> "语音识别超时，请稍后重试"
+            else -> exception.message ?: "语音查询失败，请稍后重试"
+        }
+    }
+
+    override fun onCleared() {
+        recordingJob?.cancel()
+        recorder.cancel()
+        super.onCleared()
     }
 }
 
@@ -88,28 +209,80 @@ fun QueryScreen(onNavigateMemory: (String) -> Unit) {
         }
         Spacer(Modifier.height(14.dp))
 
-        OutlinedTextField(
-            value = vm.question,
-            onValueChange = { vm.question = it },
-            modifier = Modifier.fillMaxWidth().shadow(if (vm.question.isNotEmpty()) 2.dp else 0.dp, RoundedCornerShape(10.dp)),
-            placeholder = { Text("例如：张经理承诺了什么？") },
-            leadingIcon = { Icon(Icons.Default.Search, null) },
-            trailingIcon = { if (vm.question.isNotBlank()) IconButton(onClick = { vm.submit() }, enabled = !vm.loading) { Icon(Icons.Default.Send, "查询") } },
-            singleLine = true,
-            shape = MaterialTheme.shapes.small,
-            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary),
-        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedTextField(
+                value = vm.question,
+                onValueChange = { vm.question = it },
+                modifier = Modifier.weight(1f).shadow(if (vm.question.isNotEmpty()) 2.dp else 0.dp, RoundedCornerShape(10.dp)),
+                placeholder = { Text("例如：张经理承诺了什么？") },
+                leadingIcon = { Icon(Icons.Default.Search, null) },
+                trailingIcon = {
+                    if (vm.question.isNotBlank()) {
+                        IconButton(onClick = { vm.submit() }, enabled = !vm.loading) {
+                            Icon(Icons.Default.Send, "查询")
+                        }
+                    }
+                },
+                enabled = vm.voicePhase == VoicePhase.IDLE && !vm.loading,
+                singleLine = true,
+                shape = MaterialTheme.shapes.small,
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary),
+            )
+            IconButton(
+                onClick = {
+                    if (vm.voicePhase == VoicePhase.RECORDING) vm.finishVoiceRecording(false)
+                    else vm.startVoiceRecording()
+                },
+                enabled = !vm.loading || vm.voicePhase == VoicePhase.RECORDING,
+            ) {
+                Icon(
+                    if (vm.voicePhase == VoicePhase.RECORDING) Icons.Default.Stop else Icons.Default.Mic,
+                    contentDescription = if (vm.voicePhase == VoicePhase.RECORDING) "结束语音查询" else "语音查询",
+                )
+            }
+        }
+        if (vm.voicePhase == VoicePhase.RECORDING) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("正在录音 ${vm.recordingSeconds}s，点击麦克风结束", color = MaterialTheme.colorScheme.primary)
+                TextButton(onClick = { vm.finishVoiceRecording(true) }) { Text("取消") }
+            }
+        }
         Spacer(Modifier.height(20.dp))
 
         AnimatedContent(
-            targetState = when { vm.loading -> "loading"; vm.error != null -> "error"; vm.result != null -> "result"; else -> "idle" },
+            targetState = when {
+                vm.voicePhase == VoicePhase.TRANSCRIBING -> "transcribing"
+                vm.voicePhase == VoicePhase.SEARCHING -> "searching"
+                vm.loading -> "loading"
+                vm.error != null -> "error"
+                vm.notice != null -> "notice"
+                vm.result != null -> "result"
+                else -> "idle"
+            },
             transitionSpec = { fadeIn(tween(250)) + slideInVertically(tween(250)) { it / 4 } togetherWith fadeOut(tween(150)) },
             label = "result",
         ) { state ->
             when (state) {
-                "loading" -> CircularProgressIndicator()
+                "loading", "transcribing", "searching" -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        when (state) {
+                            "transcribing" -> "正在转写语音"
+                            "searching" -> "正在检索记忆"
+                            else -> "查询中"
+                        },
+                    )
+                }
                 "error" -> Box(Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)).padding(18.dp)) {
                     Text("查询失败: ${vm.error}", color = MaterialTheme.colorScheme.error)
+                }
+                "notice" -> Box(Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(GlassBg).border(1.dp, GlassBorder, RoundedCornerShape(18.dp)).padding(18.dp)) {
+                    Text(vm.notice ?: "", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 "result" -> QueryResultView(vm.result!!)
             }

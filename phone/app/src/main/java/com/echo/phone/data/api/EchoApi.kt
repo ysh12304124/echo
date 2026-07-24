@@ -55,6 +55,24 @@ interface EchoApiService {
     @GET("memories/{memoryId}")
     suspend fun getMemory(@Path("memoryId") memoryId: String): TimeMemoryDetailDto
 
+    /** 单句转写的说话人归属写回。 */
+    @PATCH("memories/{memoryId}/transcript/{segmentId}")
+    suspend fun updateTranscriptSpeaker(
+        @Path("memoryId") memoryId: String,
+        @Path("segmentId") segmentId: String,
+        @Body request: UpdateTranscriptSpeakerRequest,
+    ): TranscriptSegmentDto
+
+    /**
+     * 将会话内的人脸标签改为用户确认的名称。服务端应同步已匹配的 person_id 对应人物库。
+     */
+    @PATCH("memories/{memoryId}/participants/{participantId}")
+    suspend fun renameMemoryParticipant(
+        @Path("memoryId") memoryId: String,
+        @Path("participantId") participantId: String,
+        @Body request: RenameMemoryParticipantRequest,
+    ): ParticipantDto
+
     @PATCH("memories/{memoryId}")
     suspend fun updateMemory(
         @Path("memoryId") memoryId: String,
@@ -135,6 +153,7 @@ interface EchoApiService {
 data class CreateSessionRequest(
     val memory_type: String,
     val scene: String? = null,
+    val scene_type: String? = null,
     val partition: String = "work",
     val title: String = "",
 )
@@ -161,6 +180,8 @@ data class MemorySummaryDto(
     val duration_seconds: Int = 0,
     val evidence_status: String = "pending",
     val is_favorited: Boolean = false,
+    val event_overview: String? = null,
+    val location: String? = null,
 )
 
 data class MemoryListDto(val items: List<MemorySummaryDto>, val total: Int)
@@ -170,10 +191,27 @@ data class NavigationSummaryDto(
     val topics: List<String>? = null,
     val spaces: List<String>? = null,
     val key_moments: List<KeyMomentDto>? = null,
+    val evidence_entries: List<EvidenceEntryDto>? = null,
     val suggested_questions: List<String>? = null,
 )
 
 data class KeyMomentDto(val id: String, val label: String, val time_offset_seconds: Int)
+
+/**
+ * 兼容现有后端的证据索引。正式人物/转写字段上线前，测试数据可先由该索引承载。
+ */
+data class EvidenceEntryDto(
+    val type: String = "",
+    val participant_id: String? = null,
+    val person_id: String? = null,
+    val name: String? = null,
+    val avatar_url: String? = null,
+    val emotion: String? = null,
+    val content: String? = null,
+    val timestamp_ms: Long = 0,
+    val highlight_id: String? = null,
+    val segment_id: String? = null,
+)
 
 data class TimeMemoryDetailDto(
     val memory_id: String,
@@ -189,6 +227,44 @@ data class TimeMemoryDetailDto(
     val key_frames: List<KeyFrameDto>? = null,
     val duration_seconds: Int,
     val started_at: String? = null,
+    val event_overview: String? = null,
+    val location: String? = null,
+    val participants: List<ParticipantDto>? = null,
+    val conversation_highlights: List<ConversationHighlightDto>? = null,
+    val transcript_segments: List<TranscriptSegmentDto>? = null,
+)
+
+/** 后端人物识别结果，头像可为完整 URL 或 /api/v1/media/... 相对路径。 */
+data class ParticipantDto(
+    val participant_id: String,
+    val name: String,
+    val avatar_url: String? = null,
+    val person_id: String? = null,
+)
+
+data class ConversationHighlightDto(
+    val highlight_id: String,
+    val participant: ParticipantDto? = null,
+    val emotion: String? = null,
+    val content: String,
+    val timestamp_ms: Long = 0,
+)
+
+data class TranscriptSegmentDto(
+    val segment_id: String,
+    val participant: ParticipantDto? = null,
+    val content: String,
+    val timestamp_ms: Long,
+)
+
+data class UpdateTranscriptSpeakerRequest(
+    val participant_id: String? = null,
+    val person_id: String? = null,
+)
+
+data class RenameMemoryParticipantRequest(
+    val name: String,
+    val person_id: String? = null,
 )
 
 data class KeyFrameDto(val media_url: String = "", val filename: String = "", val frame_index: Int = 0, val timestamp_ms: Long = 0)
@@ -223,6 +299,8 @@ data class SpaceMemoryDetailDto(
     val poses_url: String? = null,
     val anchor: AnchorDto? = null,
     val recording_duration_sec: Float = 0f,
+    val scene_summary: String? = null,
+    val loop_angle: Float? = null,
 )
 
 data class SpaceListDto(val items: List<SpaceMemoryDetailDto>, val total: Int)
@@ -239,9 +317,6 @@ data class QueryEvidenceDto(
     val type: String,
     val content: String,
     val confidence: String,
-    val source_confidence: String? = null,
-    val retrieval_score: Double? = null,
-    val used_in_answer: Boolean = false,
     val media_url: String?,
     val timestamp_ms: Long,
 )
@@ -345,16 +420,12 @@ fun MemorySummaryDto.toDomain() = MemorySummary(
     durationSeconds = duration_seconds,
     evidenceStatus = evidence_status,
     isFavorited = is_favorited,
+    eventOverview = event_overview.orEmpty(),
+    location = location.orEmpty(),
 )
 
-fun TimeMemoryDetailDto.toDomain() = TimeMemoryDetail(
-    memoryId = memory_id,
-    title = title,
-    scene = TimeScene.valueOf(scene.uppercase()),
-    partition = DataPartition.valueOf(partition.uppercase()),
-    status = MemoryStatus.valueOf(status.uppercase()),
-    identifyBrief = identify_brief,
-    navigationSummary = navigation_summary?.let {
+fun TimeMemoryDetailDto.toDomain(): TimeMemoryDetail {
+    val navigation = navigation_summary?.let {
         NavigationSummary(
             persons = it.persons ?: emptyList(),
             topics = it.topics ?: emptyList(),
@@ -364,14 +435,96 @@ fun TimeMemoryDetailDto.toDomain() = TimeMemoryDetail(
             } ?: emptyList(),
             suggestedQuestions = it.suggested_questions ?: emptyList(),
         )
-    },
-    evidenceStatus = evidence_status,
-    isFavorited = is_favorited,
-    isLocked = is_locked,
-    keyFrames = key_frames?.map { KeyFrame(mediaUrl = it.media_url, filename = it.filename, frameIndex = it.frame_index, timestampMs = it.timestamp_ms) } ?: emptyList(),
-    durationSeconds = duration_seconds,
-    startedAt = started_at,
+    }
+    val legacyEntries = navigation_summary?.evidence_entries.orEmpty()
+    return TimeMemoryDetail(
+        memoryId = memory_id,
+        title = title,
+        scene = TimeScene.valueOf(scene.uppercase()),
+        partition = DataPartition.valueOf(partition.uppercase()),
+        status = MemoryStatus.valueOf(status.uppercase()),
+        identifyBrief = identify_brief,
+        navigationSummary = navigation,
+        evidenceStatus = evidence_status,
+        isFavorited = is_favorited,
+        isLocked = is_locked,
+        keyFrames = key_frames?.map { KeyFrame(mediaUrl = it.media_url, filename = it.filename, frameIndex = it.frame_index, timestampMs = it.timestamp_ms) } ?: emptyList(),
+        durationSeconds = duration_seconds,
+        startedAt = started_at,
+        eventOverview = event_overview.orEmpty(),
+        location = location.orEmpty().ifBlank { navigation?.spaces?.firstOrNull().orEmpty() },
+        participants = participants.orEmpty().map { it.toDomain() }.ifEmpty {
+            legacyEntries.filter { it.type == "participant" }.mapNotNull { it.toParticipant() }
+        },
+        conversationHighlights = conversation_highlights.orEmpty().map { it.toDomain() }.ifEmpty {
+            legacyEntries.filter { it.type == "conversation_highlight" }.mapNotNull { it.toConversationHighlight() }
+        },
+        transcriptSegments = transcript_segments.orEmpty().map { it.toDomain() }.ifEmpty {
+            legacyEntries.filter { it.type == "transcript" }.mapNotNull { it.toTranscriptSegment() }
+        },
+    )
+}
+
+private fun ParticipantDto.toDomain() = Participant(
+    participantId = participant_id,
+    name = name,
+    avatarUrl = avatar_url,
+    personId = person_id,
 )
+
+private fun ConversationHighlightDto.toDomain() = ConversationHighlight(
+    highlightId = highlight_id,
+    participant = participant?.toDomain(),
+    emotion = emotion.toEmotionalTone(),
+    content = content,
+    timestampMs = timestamp_ms,
+)
+
+fun TranscriptSegmentDto.toDomain() = TranscriptSegment(
+    segmentId = segment_id,
+    participant = participant?.toDomain(),
+    content = content,
+    timestampMs = timestamp_ms,
+)
+
+private fun String?.toEmotionalTone() = when (this?.uppercase()) {
+    "HAPPY", "JOY", "POSITIVE" -> EmotionalTone.HAPPY
+    "ANGRY", "ANGER" -> EmotionalTone.ANGRY
+    "SAD", "SADNESS" -> EmotionalTone.SAD
+    "EXCITED", "SURPRISED" -> EmotionalTone.EXCITED
+    else -> EmotionalTone.NEUTRAL
+}
+
+private fun EvidenceEntryDto.toParticipant(): Participant? {
+    val displayName = name?.takeIf { it.isNotBlank() } ?: return null
+    return Participant(
+        participantId = participant_id ?: displayName,
+        name = displayName,
+        avatarUrl = avatar_url,
+        personId = person_id,
+    )
+}
+
+private fun EvidenceEntryDto.toConversationHighlight(): ConversationHighlight? {
+    val text = content?.takeIf { it.isNotBlank() } ?: return null
+    return ConversationHighlight(
+        highlightId = highlight_id ?: "highlight-$timestamp_ms-$text",
+        participant = toParticipant(),
+        emotion = emotion.toEmotionalTone(),
+        content = text,
+        timestampMs = timestamp_ms,
+    )
+}
+
+private fun EvidenceEntryDto.toTranscriptSegment(): TranscriptSegment? {
+    val text = content?.takeIf { it.isNotBlank() } ?: return null
+    return TranscriptSegment(
+        segmentId = segment_id ?: "segment-$timestamp_ms-$text",
+        participant = toParticipant(),
+        content = text,
+        timestampMs = timestamp_ms,
+    )
+}
 
 fun SpaceMemoryDetailDto.toDomain() = SpaceMemoryDetail(
     spaceId = space_id,
@@ -386,7 +539,18 @@ fun SpaceMemoryDetailDto.toDomain() = SpaceMemoryDetail(
     isLocked = is_locked,
     keyFrames = key_frames?.map { KeyFrame(mediaUrl = it.media_url, filename = it.filename, frameIndex = it.frame_index, timestampMs = it.timestamp_ms) } ?: emptyList(),
     anchors = anchors?.map {
-        SpaceAnchor(anchorId = it.anchor_id, name = it.name, anchorType = it.anchor_type)
+        SpaceAnchor(
+            anchorId = it.anchor_id,
+            name = it.name,
+            anchorType = it.anchor_type,
+            position = it.position?.let { pos ->
+                AnchorPoint(
+                    x = (pos["x"] ?: 0.0).toFloat(),
+                    y = (pos["y"] ?: 0.0).toFloat(),
+                    z = (pos["z"] ?: 0.0).toFloat(),
+                )
+            },
+        )
     } ?: emptyList(),
     capturedAt = captured_at,
     sceneType = scene_type,
@@ -400,6 +564,8 @@ fun SpaceMemoryDetailDto.toDomain() = SpaceMemoryDetail(
         )
     },
     recordingDurationSec = recording_duration_sec,
+    sceneSummary = scene_summary.orEmpty(),
+    loopAngle = loop_angle,
 )
 
 fun QueryResponseDto.toDomain() = QueryResult(
@@ -412,11 +578,6 @@ fun QueryResponseDto.toDomain() = QueryResult(
             type = EvidenceType.valueOf(it.type.uppercase()),
             content = it.content,
             confidence = ConfidenceLevel.valueOf(it.confidence.uppercase()),
-            sourceConfidence = it.source_confidence?.let { value ->
-                ConfidenceLevel.valueOf(value.uppercase())
-            },
-            retrievalScore = it.retrieval_score,
-            usedInAnswer = it.used_in_answer,
             mediaUrl = it.media_url,
             timestampMs = it.timestamp_ms,
         )

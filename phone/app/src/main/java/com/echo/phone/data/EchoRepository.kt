@@ -14,7 +14,10 @@ class EchoRepository(private val api: EchoApiService) {
         if (path.isNullOrBlank()) return null
         if (path.startsWith("http")) return path
         val host = BuildConfig.API_BASE_URL.removeSuffix("/api/v1/").removeSuffix("/")
-        return host + path
+        val normalizedPath = path.removePrefix("/data/blobs/").let { key ->
+            if (path.startsWith("/data/blobs/")) "/api/v1/media/$key" else path
+        }
+        return host + normalizedPath
     }
 
     suspend fun listMemories(partition: DataPartition? = null): List<MemorySummary> {
@@ -75,11 +78,13 @@ class EchoRepository(private val api: EchoApiService) {
         scene: TimeScene?,
         partition: DataPartition,
         title: String,
+        sceneType: SpaceSceneType? = null,
     ): String {
         val session = api.createSession(
             CreateSessionRequest(
                 memory_type = memoryType.name.lowercase(),
                 scene = scene?.name?.lowercase(),
+                scene_type = sceneType?.name?.lowercase(),
                 partition = partition.name.lowercase(),
                 title = title,
             )
@@ -144,6 +149,22 @@ class EchoRepository(private val api: EchoApiService) {
 
     suspend fun updateNote(memoryId: String, note: String) {
         api.updateMemory(memoryId, UpdateMemoryRequest(user_note = note))
+    }
+
+    suspend fun updateTranscriptSpeaker(memoryId: String, segmentId: String, participant: Participant) {
+        api.updateTranscriptSpeaker(
+            memoryId,
+            segmentId,
+            UpdateTranscriptSpeakerRequest(participant.participantId, participant.personId),
+        )
+    }
+
+    suspend fun renameMemoryParticipant(memoryId: String, participant: Participant, name: String) {
+        api.renameMemoryParticipant(
+            memoryId,
+            participant.participantId,
+            RenameMemoryParticipantRequest(name, participant.personId),
+        )
     }
 
     suspend fun deleteMemory(memoryId: String) {

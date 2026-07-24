@@ -3,6 +3,10 @@ package com.echo.phone.domain
 enum class DataPartition { WORK, QUALITY_TIME }
 enum class TimeScene { MEETING, ONSITE, QUALITY_TIME }
 enum class MemoryType { TIME, SPACE }
+
+/** 空间记忆场景类型：决定 PointCloudViewer 的默认模式（LARGE→路径浏览，OBJECT→物体环绕）。 */
+enum class SpaceSceneType { LARGE, OBJECT }
+
 enum class MemoryStatus {
     NOT_STARTED, RECORDING, PAUSED, UPLOADING, PROCESSING, COMPLETED, FAILED
 }
@@ -11,6 +15,15 @@ enum class QueryResultStatus { CONFIRMED, POSSIBLE, NOT_FOUND }
 enum class EvidenceType { VISUAL, TRANSCRIPT, OCR, SPATIAL, USER_NOTE }
 enum class ConfidenceLevel { HIGH, MEDIUM, LOW }
 enum class GlassesConnectionState { DISCONNECTED, CONNECTING, CONNECTED, RECORDING }
+enum class EmotionalTone { HAPPY, ANGRY, SAD, EXCITED, NEUTRAL }
+
+data class Participant(
+    val participantId: String,
+    val name: String,
+    val avatarUrl: String? = null,
+    /** 后端人物库匹配成功时提供；用于让跨记忆的人名保持一致。 */
+    val personId: String? = null,
+)
 
 data class MemorySummary(
     val memoryId: String,
@@ -24,6 +37,8 @@ data class MemorySummary(
     val durationSeconds: Int = 0,
     val evidenceStatus: String = "pending",
     val isFavorited: Boolean = false,
+    val eventOverview: String = "",
+    val location: String = "",
 )
 
 data class NavigationSummary(
@@ -50,6 +65,26 @@ data class TimeMemoryDetail(
     val keyFrames: List<KeyFrame> = emptyList(),
     val durationSeconds: Int,
     val startedAt: String? = null,
+    val eventOverview: String = "",
+    val location: String = "",
+    val participants: List<Participant> = emptyList(),
+    val conversationHighlights: List<ConversationHighlight> = emptyList(),
+    val transcriptSegments: List<TranscriptSegment> = emptyList(),
+)
+
+data class ConversationHighlight(
+    val highlightId: String,
+    val participant: Participant?,
+    val emotion: EmotionalTone = EmotionalTone.NEUTRAL,
+    val content: String,
+    val timestampMs: Long = 0,
+)
+
+data class TranscriptSegment(
+    val segmentId: String,
+    val participant: Participant?,
+    val content: String,
+    val timestampMs: Long,
 )
 
 data class CameraPose(
@@ -100,6 +135,8 @@ data class SpaceMemoryDetail(
     val posesUrl: String? = null,
     val anchorPoint: AnchorPoint? = null,
     val recordingDurationSec: Float = 0f,
+    val sceneSummary: String = "",
+    val loopAngle: Float? = null,
 )
 
 data class QueryEvidence(
@@ -121,6 +158,23 @@ data class QueryResult(
     val evidences: List<QueryEvidence>,
     val sources: List<QuerySource> = emptyList(),
     val uncertaintyReason: String?,
+)
+
+data class VoiceQueryResult(
+    val transcript: String,
+    val durationMs: Int = 0,
+    val asrAvgLogprob: Double?,
+    val asrAccepted: Boolean,
+    val rejectionReason: String?,
+    val result: QueryResult?,
+)
+
+data class VoiceTranscriptionResult(
+    val transcript: String,
+    val durationMs: Int,
+    val asrAvgLogprob: Double?,
+    val asrAccepted: Boolean,
+    val rejectionReason: String?,
 )
 
 data class PersonSummary(
@@ -183,6 +237,7 @@ data class SpaceAnchor(
     val anchorId: String,
     val name: String,
     val anchorType: String,
+    val position: AnchorPoint? = null,
 )
 
 data class DeviceStatus(

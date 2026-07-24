@@ -122,6 +122,7 @@ async def create_session(req: CreateSessionRequest, repo: MemoryRepository = Dep
         session = await pipeline.create_session(
             memory_type=req.memory_type,
             scene=req.scene,
+            scene_type=req.scene_type.value if req.scene_type else None,
             partition=req.partition,
             title=req.title,
         )
@@ -129,10 +130,11 @@ async def create_session(req: CreateSessionRequest, repo: MemoryRepository = Dep
         log.warning("创建会话失败: %s", e)
         raise HTTPException(400, str(e))
     log.info(
-        "会话已创建 session=%s type=%s scene=%s partition=%s title=%r",
+        "会话已创建 session=%s type=%s scene=%s scene_type=%s partition=%s title=%r",
         session.id,
         session.memory_type.value,
         session.scene.value if session.scene else "-",
+        session.scene_type or "-",
         session.partition.value,
         req.title,
     )
@@ -140,6 +142,7 @@ async def create_session(req: CreateSessionRequest, repo: MemoryRepository = Dep
         session_id=session.id,
         memory_type=session.memory_type,
         scene=session.scene,
+        scene_type=req.scene_type,
         partition=session.partition,
         status=session.status,
         created_at=session.created_at,

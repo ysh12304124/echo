@@ -48,7 +48,7 @@ fun SpaceMemoryDetail.toMemorySummary() = MemorySummary(
     memoryType = MemoryType.SPACE,
     status = if (modelUrl.isNullOrBlank() || modelUrl.contains("placeholder")) MemoryStatus.PROCESSING else MemoryStatus.COMPLETED,
     identifyBrief = identifyBrief,
-    title = title.ifBlank { "空间记忆" },
+    title = sceneSummary.ifBlank { title.ifBlank { "空间记忆" } },
     scene = null,
     partition = partition,
     startedAt = capturedAt,
@@ -139,8 +139,9 @@ class HomeViewModel(
 
     fun connectGlasses() {
         viewModelScope.launch {
-            try { glasses.connect(); error = null }
-            catch (e: Exception) { error = "连接失败: ${e.message}" }
+            // 眼镜连接与记忆库读取相互独立；离线查看已完成记忆不能被连接失败遮住。
+            try { glasses.connect() }
+            catch (_: Exception) { }
         }
     }
 }
@@ -261,93 +262,137 @@ fun HomeScreen(
         vm.pendingDeleteId = null
     }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp).padding(top = 20.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text(title, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface)
-        }
-        Spacer(Modifier.height(12.dp))
-
-        // 设备状态：连接状态 / 记忆场景状态 / 上传状态栏，三段独立展示，互不覆盖。
-        Box(Modifier.fillMaxWidth().shadow(8.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(GlassBgElevated).border(1.dp, GlassBorderElevated, RoundedCornerShape(18.dp)).padding(16.dp)) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // 1. 眼镜连接状态
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (ds.connected) Color(0xFF10B981) else Color(0xFFD1D5DB)))
-                    Spacer(Modifier.width(10.dp))
-                    val connText = if (ds.connected) "眼镜已连接 · 电量 ${ds.batteryPercent}%" else "未连接"
-                    Text(connText, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    if (!ds.connected) FilledTonalButton(onClick = { vm.connectGlasses() }, modifier = Modifier.height(34.dp)) { Text("连接眼镜") }
+    PullToRefreshBox(
+        isRefreshing = vm.isRefreshing,
+        onRefresh = { vm.refresh() },
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp).padding(top = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp),
+            contentPadding = PaddingValues(bottom = 24.dp),
+        ) {
+            item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(title, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface)
                 }
+                Spacer(Modifier.height(12.dp))
 
-                // 2. 记忆场景状态
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    BreathingDot(isRec, sceneAccent(activeScene).takeIf { isRec } ?: Color(0xFFEF4444))
-                    Spacer(Modifier.width(10.dp))
-                    val sceneText = when {
-                        activeScene != null && ds.isRecordingSpace -> "${sceneLabel(activeScene)}时间记忆中，3D记忆已开启"
-                        activeScene != null -> "${sceneLabel(activeScene)}时间记忆中"
-                        justCompletedScene != null -> "${sceneLabel(justCompletedScene)}记忆结束"
-                        else -> "记忆未开启"
+                // 设备状态：连接状态 / 记忆场景状态 / 上传状态栏，三段独立展示，互不覆盖。
+                Box(Modifier.fillMaxWidth().shadow(8.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).background(GlassBgElevated).border(1.dp, GlassBorderElevated, RoundedCornerShape(18.dp)).padding(16.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(8.dp).clip(CircleShape).background(if (ds.connected) Color(0xFF10B981) else Color(0xFFD1D5DB)))
+                            Spacer(Modifier.width(10.dp))
+                            val connText = if (ds.connected) "眼镜已连接 · 电量 ${ds.batteryPercent}%" else "未连接"
+                            Text(connText, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            if (!ds.connected) FilledTonalButton(onClick = { vm.connectGlasses() }, modifier = Modifier.height(34.dp)) { Text("连接眼镜") }
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            BreathingDot(isRec, sceneAccent(activeScene).takeIf { isRec } ?: Color(0xFFEF4444))
+                            Spacer(Modifier.width(10.dp))
+                            val sceneText = when {
+                                activeScene != null && ds.isRecordingSpace -> "${sceneLabel(activeScene)}时间记忆中，3D记忆已开启"
+                                activeScene != null -> "${sceneLabel(activeScene)}时间记忆中"
+                                justCompletedScene != null -> "${sceneLabel(justCompletedScene)}记忆结束"
+                                else -> "记忆未开启"
+                            }
+                            Text(sceneText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f))
+                        }
+
+                        AnimatedVisibility(visible = uploadStatus.visible) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                UploadChip("视频", uploadStatus.videoDone)
+                                UploadChip("音频", uploadStatus.audioDone)
+                                if (uploadStatus.spaceEnabled) UploadChip("IMU", uploadStatus.imuDone)
+                            }
+                        }
+
+                        val inlineSpaceActive by app.inlineSpaceActive.collectAsState()
+                        val scope = rememberCoroutineScope()
+                        var selectedSpaceType by remember { mutableStateOf(SpaceSceneType.LARGE) }
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("空间场景:", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                                FilterChip(
+                                    selected = selectedSpaceType == SpaceSceneType.LARGE,
+                                    onClick = { selectedSpaceType = SpaceSceneType.LARGE },
+                                    label = { Text("大场景") },
+                                )
+                                FilterChip(
+                                    selected = selectedSpaceType == SpaceSceneType.OBJECT,
+                                    onClick = { selectedSpaceType = SpaceSceneType.OBJECT },
+                                    label = { Text("单物体") },
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (!inlineSpaceActive) {
+                                    Button(
+                                        onClick = { scope.launch { app.startInlineSpace(selectedSpaceType) } },
+                                        enabled = isRec,
+                                    ) { Text("开启空间记忆") }
+                                    if (!isRec) Text("（需TIME录制中）", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                                } else {
+                                    Text("3D 记忆中", style = MaterialTheme.typography.bodyMedium, color = Color(0xFFF59E0B))
+                                    Button(onClick = { scope.launch { app.stopInlineSpace() } }) { Text("结束空间记忆") }
+                                }
+                            }
+                        }
                     }
-                    Text(sceneText, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f))
                 }
 
-                // 3. 上传状态栏：仅记忆进行中(含收尾上传)时展示，全部完成后延迟隐藏。
-                AnimatedVisibility(visible = uploadStatus.visible) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        UploadChip("视频", uploadStatus.videoDone)
-                        UploadChip("音频", uploadStatus.audioDone)
-                        if (uploadStatus.spaceEnabled) UploadChip("IMU", uploadStatus.imuDone)
-                    }
-                }
+                Spacer(Modifier.height(24.dp))
+                Text("最近记忆", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
             }
-        }
 
-        Spacer(Modifier.height(24.dp))
-        Text("最近记忆", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-
-        PullToRefreshBox(isRefreshing = vm.isRefreshing, onRefresh = { vm.refresh() }) {
-            AnimatedContent(
-                targetState = when { vm.loading && !vm.isRefreshing -> "loading"; displayMemories.isEmpty() && !vm.isRefreshing -> "empty"; vm.error != null -> "error"; else -> "list" },
-                transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(150)) },
-                label = "home",
-            ) { state ->
-                when (state) {
-                    "loading" -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { repeat(3) { SkeletonCard() } }
-                    "empty" -> Box(Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) {
+            when {
+                vm.loading && !vm.isRefreshing -> repeat(3) {
+                    item {
+                        Spacer(Modifier.height(12.dp))
+                        SkeletonCard()
+                    }
+                }
+                displayMemories.isEmpty() && !vm.isRefreshing -> item {
+                    Box(Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("⏳", style = MaterialTheme.typography.headlineLarge)
                             Text("暂无记忆", style = MaterialTheme.typography.bodyLarge, color = Color(0xFF6B7280))
                         }
                     }
-                    "error" -> Column { Text("加载失败: ${vm.error}", color = MaterialTheme.colorScheme.error); TextButton(onClick = { vm.refresh() }) { Text("重试") } }
-                    else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                        var lastDate = ""
-                        displayMemories.forEachIndexed { i, memory ->
-                            val thisDate = memory.startedAt?.substring(0, 10) ?: ""
-                            val isNewDate = thisDate.isNotEmpty() && thisDate != lastDate
-                            if (isNewDate) lastDate = thisDate
-                            item(key = memory.memoryId) {
-                                if (isNewDate) TimelineDateLabel(thisDate)
-                                val isFirst = i == 0
-                                TimelineItem(i, displayMemories.size, false, isNewDate && isFirst) {
-                                    val isDeleting = vm.animatingDeleteId == memory.memoryId
-                                    val isReveal = vm.revealNew && i == 0
-                                    androidx.compose.animation.AnimatedVisibility(
-                                        visible = !isDeleting,
-                                        enter = if (isReveal) expandVertically(spring(dampingRatio = 0.6f, stiffness = 300f)) + fadeIn(tween(300)) else fadeIn(tween(400)) + scaleIn(tween(400)),
-                                        exit = fadeOut(tween(400)) + scaleOut(targetScale = 0.9f, animationSpec = tween(400))
-                                    ) {
+                }
+                vm.error != null -> item {
+                    Column {
+                        Text("加载失败: ${vm.error}", color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { vm.refresh() }) { Text("重试") }
+                    }
+                }
+                else -> {
+                    var lastDate = ""
+                    displayMemories.forEachIndexed { i, memory ->
+                        val thisDate = memory.startedAt?.substring(0, 10) ?: ""
+                        val isNewDate = thisDate.isNotEmpty() && thisDate != lastDate
+                        if (isNewDate) lastDate = thisDate
+                        item(key = memory.memoryId) {
+                            if (isNewDate) TimelineDateLabel(thisDate)
+                            val isFirst = i == 0
+                            TimelineItem(i, displayMemories.size, false, isNewDate && isFirst) {
+                                val isDeleting = vm.animatingDeleteId == memory.memoryId
+                                val isReveal = vm.revealNew && i == 0
+                                AnimatedVisibility(
+                                    visible = !isDeleting,
+                                    enter = if (isReveal) expandVertically(spring(dampingRatio = 0.6f, stiffness = 300f)) + fadeIn(tween(300)) else fadeIn(tween(400)) + scaleIn(tween(400)),
+                                    exit = fadeOut(tween(400)) + scaleOut(targetScale = 0.9f, animationSpec = tween(400)),
+                                ) {
                                     MemoryCard(
-                                memory = memory,
-                                onClick = {
-                            if (memory.memoryType == MemoryType.SPACE) onNavigateSpace(memory.memoryId)
-                            else onNavigateMemory(memory.memoryId)
-                        },
-                                onFavorite = { vm.toggleFavorite(memory.memoryId) },
-                                onDelete = { vm.deleteMemory(memory.memoryId) }
-                            )
-                            }
+                                        memory = memory,
+                                        onClick = {
+                                            if (memory.memoryType == MemoryType.SPACE) onNavigateSpace(memory.memoryId)
+                                            else onNavigateMemory(memory.memoryId)
+                                        },
+                                        onFavorite = { vm.toggleFavorite(memory.memoryId) },
+                                        onDelete = { vm.deleteMemory(memory.memoryId) },
+                                    )
                                 }
                             }
                         }
@@ -402,6 +447,7 @@ private fun MemoryCard(
     showActions: Boolean = true,
 ) {
     val accent = if (memory.memoryType == MemoryType.SPACE) Color(0xFFF59E0B) else sceneAccent(memory.scene)
+    val presentation = memory.toPresentation()
     Card(
         Modifier.fillMaxWidth().shadow(4.dp, RoundedCornerShape(18.dp)).clip(RoundedCornerShape(18.dp)).clickable { onClick() },
         colors = CardDefaults.cardColors(containerColor = Color.Transparent),
@@ -411,20 +457,16 @@ private fun MemoryCard(
                 Box(Modifier.width(3.dp).fillMaxHeight().defaultMinSize(minHeight = 72.dp).clip(RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp)).background(accent.copy(alpha = 0.6f)))
                 Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp).weight(1f)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text(memory.title.ifEmpty { memory.identifyBrief }.ifEmpty { "未命名记忆" }, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text(presentation.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        buildString {
-                            memory.startedAt?.let { append(it.substring(0, 10) + " " + it.substring(11, 16)) }
-                            memory.scene?.let { append("  ${it.name}") }
-                            if (memory.durationSeconds > 0) append("  ${memory.durationSeconds}s")
-                        },
+                        presentation.metadata,
                         style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFont), color = Color(0xFF6B7280),
                     )
-                    if (memory.identifyBrief.isNotEmpty()) {
+                    if (presentation.overview.isNotBlank()) {
                         Spacer(Modifier.height(8.dp))
-                        Text(memory.identifyBrief, style = MaterialTheme.typography.bodyMedium, maxLines = 2, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f))
+                        Text(presentation.overview, style = MaterialTheme.typography.bodyMedium, maxLines = 2, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f))
                     }
                     if (showActions && onFavorite != null) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {

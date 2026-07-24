@@ -32,6 +32,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -96,7 +97,8 @@ fun PointCloudViewer(
     var currentMode by remember { mutableStateOf(if (sceneType == "object") "orbit" else "path") }
     var speedMult by remember { mutableStateOf(1f) }
     var popupExpanded by remember { mutableStateOf(true) }
-    val activity = LocalContext.current as Activity
+    val context = LocalContext.current
+    val activity = context as Activity
 
     // Orientation control
     activity.requestedOrientation = if (isFullscreen) {
@@ -136,6 +138,54 @@ fun PointCloudViewer(
         }
     }
 
+    val viewerWebView = remember(html) {
+        makeWebView(context).apply {
+            webViewClient = object : android.webkit.WebViewClient() {
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    pageLoaded = true
+                }
+            }
+            loadDataWithBaseURL(BASE_URL + "/", html, "text/html", "utf-8", null)
+            setOnTouchListener { _, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> parent?.requestDisallowInterceptTouchEvent(true)
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> parent?.requestDisallowInterceptTouchEvent(false)
+                }
+                false
+            }
+            webViewRef["wv"] = this
+        }
+    }
+    var fullscreenWebView by remember { mutableStateOf<WebView?>(null) }
+    var savedCameraState by remember { mutableStateOf<String?>(null) }
+    fun closeFullscreen() {
+        fullscreenWebView?.apply {
+            evaluateJavascript("disposeViewer()", null)
+            stopLoading()
+            destroy()
+        }
+        fullscreenWebView = null
+        webViewRef["wv"] = viewerWebView
+        isFullscreen = false
+    }
+
+    LaunchedEffect(isFullscreen) {
+        if (isFullscreen) {
+            webViewRef["wv"]?.evaluateJavascript("exportView()") { result ->
+                savedCameraState = result.removeSurrounding("\"").replace("\\\"", "\"")
+            }
+        }
+    }
+    DisposableEffect(viewerWebView) {
+        onDispose {
+            fullscreenWebView?.destroy()
+            viewerWebView.evaluateJavascript("disposeViewer()", null)
+            viewerWebView.stopLoading()
+            viewerWebView.destroy()
+            webViewRef.remove("wv")
+        }
+    }
+
     // State for controls
     var upHeld by remember { mutableStateOf(false) }
     var downHeld by remember { mutableStateOf(false) }
@@ -150,19 +200,24 @@ fun PointCloudViewer(
     var orbiting by remember { mutableStateOf(false) }
     var orbitSwipeActive by remember { mutableStateOf(false) }
 
-    // Sync mode and speed to JS (wait for page load)
+    // Sync the pose-derived orbit circle and mode to JS after the page loads.
     LaunchedEffect(currentMode, pageLoaded, orbitCircle) {
         if (pageLoaded) {
             if (orbitCircle != null) {
                 val orbJs = "{\"cx\":${orbitCircle.center[0]},\"cy\":${orbitCircle.center[1]},\"cz\":${orbitCircle.center[2]},\"r\":${orbitCircle.radius},\"nx\":${orbitCircle.normal[0]},\"ny\":${orbitCircle.normal[1]},\"nz\":${orbitCircle.normal[2]}}"
-                webViewRef["wv"]?.evaluateJavascript("ORBIT=$orbJs;", null)
+                webViewRef["wv"]?.evaluateJavascript("setOrbitData($orbJs)", null)
             }
             webViewRef["wv"]?.evaluateJavascript("setMode('$currentMode')", null)
         }
     }
-    LaunchedEffect(speedMult, pageLoaded, poses.size) {
+    LaunchedEffect(isFullscreen, pageLoaded) {
+        if (pageLoaded && isFullscreen && currentMode == "orbit") {
+            webViewRef["wv"]?.evaluateJavascript("setMode('orbit')", null)
+        }
+    }
+    LaunchedEffect(speedMult, pageLoaded, baseSpeed) {
         if (pageLoaded && poses.isNotEmpty()) {
-            webViewRef["wv"]?.evaluateJavascript("setSpeed(${poses.size / 10f * speedMult})", null)
+            webViewRef["wv"]?.evaluateJavascript("setSpeed(${baseSpeed * speedMult})", null)
         }
     }
 
@@ -180,7 +235,7 @@ fun PointCloudViewer(
 
     if (isFullscreen) {
         Dialog(
-            onDismissRequest = { isFullscreen = false },
+            onDismissRequest = ::closeFullscreen,
             properties = DialogProperties(
                 usePlatformDefaultWidth = false,
                 dismissOnBackPress = true,
@@ -213,10 +268,17 @@ fun PointCloudViewer(
                         makeWebView(ctx).apply {
                             webViewClient = object : android.webkit.WebViewClient() {
                                 override fun onPageFinished(view: WebView?, url: String?) {
-                                    pageLoaded = true
+                                    val state = savedCameraState
+                                    val restore = state?.replace("\\", "\\\\")?.replace("'", "\\'")
+                                    if (restore != null) {
+                                        evaluateJavascript("setMode('$currentMode');restoreView('$restore')", null)
+                                    } else {
+                                        evaluateJavascript("setMode('$currentMode')", null)
+                                    }
                                 }
                             }
                             loadDataWithBaseURL(BASE_URL + "/", html, "text/html", "utf-8", null)
+                            fullscreenWebView = this
                             webViewRef["wv"] = this
                         }
                     },
@@ -233,7 +295,16 @@ fun PointCloudViewer(
                                 .background(Color.White.copy(alpha = if (upHeld) 0.25f else 0.1f))
                                 .pointerInput(Unit) {
                                     awaitPointerEventScope {
-                                        while (true) { upHeld = awaitPointerEvent().changes.any { it.pressed } }
+                                        var wasPressed = false
+                                        while (true) {
+                                            val pressed = awaitPointerEvent().changes.any { it.pressed }
+                                            if (pressed && !wasPressed) {
+                                                // 短点击可能在 16ms 持续循环采样前释放，按下瞬间补一次离散移动。
+                                                webViewRef["wv"]?.evaluateJavascript("movePath(1)", null)
+                                            }
+                                            upHeld = pressed
+                                            wasPressed = pressed
+                                        }
                                     }
                                 },
                             contentAlignment = Alignment.Center,
@@ -245,7 +316,15 @@ fun PointCloudViewer(
                                 .background(Color.White.copy(alpha = if (downHeld) 0.25f else 0.1f))
                                 .pointerInput(Unit) {
                                     awaitPointerEventScope {
-                                        while (true) { downHeld = awaitPointerEvent().changes.any { it.pressed } }
+                                        var wasPressed = false
+                                        while (true) {
+                                            val pressed = awaitPointerEvent().changes.any { it.pressed }
+                                            if (pressed && !wasPressed) {
+                                                webViewRef["wv"]?.evaluateJavascript("movePath(-1)", null)
+                                            }
+                                            downHeld = pressed
+                                            wasPressed = pressed
+                                        }
                                     }
                                 },
                             contentAlignment = Alignment.Center,
@@ -446,7 +525,7 @@ fun PointCloudViewer(
                     Box(
                         Modifier.size(40.dp).clip(CircleShape)
                             .background(Color.Black.copy(alpha = 0.5f))
-                            .pointerInput(Unit) { detectTapGestures { isFullscreen = false } },
+                            .pointerInput(Unit) { detectTapGestures { closeFullscreen() } },
                         contentAlignment = Alignment.Center,
                     ) { Text("⬒", color = Color(0xFFCCCCCC), fontSize = 14.sp) }
                 }
@@ -525,27 +604,10 @@ fun PointCloudViewer(
     }
 
     // Normal mode (card view)
-    Box(modifier = modifier) {
+    if (!isFullscreen) Box(modifier = modifier) {
         AndroidView(
             modifier = Modifier.matchParentSize(),
-            factory = { ctx ->
-                makeWebView(ctx).apply {
-                    webViewClient = object : android.webkit.WebViewClient() {
-                        override fun onPageFinished(view: WebView?, url: String?) {
-                            pageLoaded = true
-                        }
-                    }
-                    loadDataWithBaseURL(BASE_URL + "/", html, "text/html", "utf-8", null)
-                    setOnTouchListener { _, event ->
-                        when (event.action) {
-                            MotionEvent.ACTION_DOWN -> parent.requestDisallowInterceptTouchEvent(true)
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> parent.requestDisallowInterceptTouchEvent(false)
-                        }
-                        false
-                    }
-                    webViewRef["wv"] = this
-                }
-            },
+            factory = { viewerWebView },
         )
         Row(
             modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp),
@@ -578,10 +640,14 @@ private fun buildViewerHtml(plyJs: String, posesJson: String, orbitJson: String)
 <script>
 var W=window.innerWidth,H=window.innerHeight,D=devicePixelRatio||2;
 var PLY=$plyJs;
-var POSES=$posesJson;
+var SOURCE_POSES=$posesJson;
+// COLMAP recordings use Y-down/Z-forward while PlayCanvas is Y-up/Z-back.
+// Apply (x,y,z)->(x,-y,-z) to poses and the model together.
+var POSES=SOURCE_POSES&&SOURCE_POSES.map(function(p){return {px:p.px,py:-p.py,pz:-p.pz,fx:p.fx,fy:-p.fy,fz:-p.fz};});
 var ORBIT=$orbitJson;
+if(ORBIT){ORBIT={cx:ORBIT.cx,cy:-ORBIT.cy,cz:-ORBIT.cz,r:ORBIT.r,nx:ORBIT.nx,ny:-ORBIT.ny,nz:-ORBIT.nz};}
 </script>
-<script src='$BASE_URL/data/threejs/playcanvas.min.js'></script>
+<script src='$BASE_URL/api/v1/media/threejs/playcanvas.min.js'></script>
 <script>
 (function(){
 var canvas=document.getElementById('c');
@@ -597,16 +663,18 @@ var tx=0,ty=0,tz=0;
 var initTheta=0,initPhi=Math.PI/3,initRadius=3,initTx=0,initTy=0,initTz=0;
 var camEnt=null,app=null;
 
+// Orbit always targets the GS bounding-box center. Keep it separate from the
+// free/path camera state so a gesture can never move the orbit target.
+var orbitCenterX=0,orbitCenterY=0,orbitCenterZ=0;
+var sceneRadius=1;
+var pathBackOffset=0.4,pathUpOffset=0.15,pathDownTilt=0.12;
+
 // Path following state
 var pathMode='free';  // 'path', 'orbit', 'free'
-var pathIdx=0;
-var pathSpeed=1.0;
-var pathUserTheta=0, pathUserPhi=0;
-var pathReturning=false;
-var pathReturnTimer=0;
-var PATH_RETURN_DURATION=0.5; // seconds
-var pathMoving=0;  // 1=fwd, -1=back, 0=stop
+var pathDistance=0;
+var pathSpeed=1.0; // model-coordinate units per second
 var lastPathTime=0;
+var pathSegmentLengths=null,pathTotalLength=0;
 
 // Orbit state
 var orbitUserDH=0, orbitUserDV=0;
@@ -614,27 +682,39 @@ var ORBIT_MAX_ADJUST=30*Math.PI/180; // ±30 degrees
 
 function camPos(){
   var st=Math.sin(theta),ct=Math.cos(theta),sp=Math.sin(phi),cp=Math.cos(phi);
-  return{x:tx+radius*sp*ct,y:ty+radius*cp,z:tz+radius*sp*st};
+  var cx=pathMode==='orbit'?orbitCenterX:tx;
+  var cy=pathMode==='orbit'?orbitCenterY:ty;
+  var cz=pathMode==='orbit'?orbitCenterZ:tz;
+  return{x:cx+radius*sp*ct,y:cy+radius*cp,z:cz+radius*sp*st};
+}
+
+function setCameraDirection(fx,fy,fz){
+  var fl=Math.sqrt(fx*fx+fy*fy+fz*fz)||1;
+  fx/=fl;fy/=fl;fz/=fl;
+  // Camera looks along local -Z. Build an orthonormal basis from the desired
+  // world-space forward vector and world up, with a fallback near the poles.
+  var rx=-fz,ry=0,rz=fx; var rl=Math.sqrt(rx*rx+rz*rz);
+  if(rl>0.001){rx/=rl;rz/=rl;}else{rx=1;ry=0;rz=0;}
+  var ux=ry*fz-rz*fy,uy=rz*fx-rx*fz,uz=rx*fy-ry*fx;
+  var m=new pc.Mat4();
+  m.data.set([rx,ry,rz,0, ux,uy,uz,0, -fx,-fy,-fz,0, 0,0,0,1]);
+  var q=new pc.Quat();q.setFromMat4(m);
+  camEnt.setRotation(q);
 }
 
 function applyCam(){
   if(!camEnt)return;
   if(pathMode==='path'){
-    // Direct position at pose, no orbit offset
     camEnt.setPosition(tx,ty,tz);
-    // forward=(fx,fy,fz) set by movePath/setMode, convert to quaternion
     var fx=Math.sin(phi)*Math.cos(theta);
     var fy=Math.cos(phi);
     var fz=Math.sin(phi)*Math.sin(theta);
-    // Right = cross(forward, world-up)
-    var rx=-fz,ry=0,rz=fx; var rl=Math.sqrt(rx*rx+rz*rz);
-    if(rl>0.001){rx/=rl;rz/=rl;}else{rx=1;rz=0;}
-    // Up = cross(right, forward)
-    var ux=ry*fz-rz*fy,uy=rz*fx-rx*fz,uz=rx*fy-ry*fx;
-    var m=new pc.Mat4();
-    m.data.set([rx,ry,rz,0, ux,uy,uz,0, -fx,-fy,-fz,0, 0,0,0,1]);
-    var q=new pc.Quat();q.setFromMat4(m);
-    camEnt.setRotation(q);
+    setCameraDirection(fx,fy,fz);
+  }else if(pathMode==='orbit'){
+    var p=camPos();camEnt.setPosition(p.x,p.y,p.z);
+    // Orbit gestures change only the spherical camera position. Recompute the
+    // view direction from that position to the fixed center on every update.
+    setCameraDirection(orbitCenterX-p.x,orbitCenterY-p.y,orbitCenterZ-p.z);
   }else{
     var p=camPos();camEnt.setPosition(p.x,p.y,p.z);
     var st=Math.sin(theta),ct=Math.cos(theta),sp=Math.sin(phi),cp=Math.cos(phi);
@@ -648,81 +728,106 @@ function applyCam(){
   }
 }
 
-// Path movement - called from Kotlin at 16ms intervals
-window.movePath=function(dir){
+function shortestAngleDelta(from,to){
+  var full=Math.PI*2;
+  return ((to-from+Math.PI)%full+full)%full-Math.PI;
+}
+function prepareClosedPath(){
   if(!POSES||POSES.length<2)return;
-  pathMoving=dir;
-  var now=performance.now()/1000;
-  if(lastPathTime===0)lastPathTime=now;
-  var dt=Math.min(now-lastPathTime,0.1);
-  lastPathTime=now;
-
-  var step=pathSpeed*dt; // pathSpeed = poses/sec
-  var newIdx=pathIdx+dir*step;
-  // Loop: back at start wraps to end, forward at end wraps to start
-  if(newIdx<0)newIdx=POSES.length-1;
-  else if(newIdx>=POSES.length)newIdx=0;
-  pathIdx=newIdx;
-  var pi=Math.floor(pathIdx);
-  var frac=pathIdx-pi;
-  var next=Math.min(pi+1,POSES.length-1);
-
-  var p0=POSES[pi],p1=POSES[next];
+  pathSegmentLengths=[];pathTotalLength=0;
+  for(var i=0;i<POSES.length;i++){
+    var a=POSES[i],b=POSES[(i+1)%POSES.length];
+    var dx=b.px-a.px,dy=b.py-a.py,dz=b.pz-a.pz;
+    var len=Math.sqrt(dx*dx+dy*dy+dz*dz);
+    pathSegmentLengths.push(len);pathTotalLength+=len;
+  }
+}
+function applyPathDistance(){
+  if(!pathSegmentLengths||pathTotalLength<=0)return;
+  pathDistance=((pathDistance%pathTotalLength)+pathTotalLength)%pathTotalLength;
+  var remaining=pathDistance,segment=0;
+  while(segment<pathSegmentLengths.length-1&&remaining>pathSegmentLengths[segment]){
+    remaining-=pathSegmentLengths[segment++];
+  }
+  var len=pathSegmentLengths[segment];
+  var frac=len>0?remaining/len:0;
+  var p0=POSES[segment],p1=POSES[(segment+1)%POSES.length];
   var px=p0.px+(p1.px-p0.px)*frac;
   var py=p0.py+(p1.py-p0.py)*frac;
   var pz=p0.pz+(p1.pz-p0.pz)*frac;
   var fx=p0.fx+(p1.fx-p0.fx)*frac;
   var fy=p0.fy+(p1.fy-p0.fy)*frac;
   var fz=p0.fz+(p1.fz-p0.fz)*frac;
-
-  // Smooth position
-  tx+=(px-tx)*0.15; ty+=(py-ty)*0.15; tz+=(pz-tz)*0.15;
-
-  // Target direction from pose
   var fl=Math.sqrt(fx*fx+fy*fy+fz*fz)||1;
   fx/=fl;fy/=fl;fz/=fl;
-
-  // Convert forward to theta/phi
+  // The recording matrices describe the opposite camera axis for this GS
+  // viewer. Reverse it once, then add a small downward pitch so the path
+  // view looks into the scene instead of at the back of the pose camera.
+  fx=-fx;fy=-fy;fz=-fz;
+  fy-=pathDownTilt;
+  fl=Math.sqrt(fx*fx+fy*fy+fz*fz)||1;
+  fx/=fl;fy/=fl;fz/=fl;
   var targetTheta=Math.atan2(fz,fx);
   var targetPhi=Math.acos(Math.max(-1,Math.min(1,fy)));
-
-  // Interpolate current theta/phi toward target
-  var speed=0.12;
-  theta+=(targetTheta-theta)*speed;
-  phi+=(targetPhi-phi)*speed;
-
+  var desiredX=px-fx*pathBackOffset;
+  var desiredY=py-fy*pathBackOffset+pathUpOffset;
+  var desiredZ=pz-fz*pathBackOffset;
+  // Follow continuously while always choosing the shorter direction across +/- PI.
+  var smoothing=0.15;
+  if(arguments.length>0&&arguments[0]===true){
+    tx=desiredX;ty=desiredY;tz=desiredZ;
+    theta=targetTheta;phi=targetPhi;
+  }else{
+    tx+=(desiredX-tx)*smoothing;ty+=(desiredY-ty)*smoothing;tz+=(desiredZ-tz)*smoothing;
+    theta+=shortestAngleDelta(theta,targetTheta)*smoothing;
+    phi+=(targetPhi-phi)*smoothing;
+  }
   applyCam();
+}
+
+// Path movement - called from Kotlin at 16ms intervals
+window.movePath=function(dir){
+  if(!POSES||POSES.length<2)return;
+  var now=performance.now()/1000;
+  var dt=lastPathTime===0?1/30:Math.min(now-lastPathTime,0.1);
+  lastPathTime=now;
+  pathDistance+=dir*pathSpeed*dt;
+  applyPathDistance();
 };
 
 window.stopPath=function(){
-  pathMoving=0;lastPathTime=0;
+  lastPathTime=0;
 };
 
 // Orbit swipe: simple theta/phi adjustment on sphere
 window.swipeOrbit=function(dx,dy){
-  if(!ORBIT)return;
+  if(pathMode!=='orbit'){pathMode='orbit';}
+  if(!ORBIT){ORBIT={cx:orbitCenterX,cy:orbitCenterY,cz:orbitCenterZ,r:Math.max(0.1,radius/1.5)};}
+  orbitCenterX=ORBIT.cx;orbitCenterY=ORBIT.cy;orbitCenterZ=ORBIT.cz;
   theta-=dx*0.005;
-  phi-=(dy||0)*0.005;
-  phi=Math.max(0.1,Math.min(Math.PI-0.1,phi)); // stay off poles
+  phi=Math.max(0.05,Math.min(Math.PI-0.05,phi-(dy||0)*0.005));
   applyCam();
 };
 
 window.setMode=function(m){
   pathMode=m;
   if(m==='path'&&POSES){
-    var p=POSES[0];
-    tx=p.px;ty=p.py;tz=p.pz;
-    var fx=p.fx,fy=p.fy,fz=p.fz;
-    theta=Math.atan2(fz,fx);
-    phi=Math.acos(Math.max(-1,Math.min(1,fy)));
-    pathIdx=0;lastPathTime=0;
-    applyCam();
+    pathDistance=0;lastPathTime=0;
+    applyPathDistance(true);
   }else if(m==='orbit'&&ORBIT){
     orbitUserDH=0;orbitUserDV=0;
-    tx=ORBIT.cx; ty=ORBIT.cy; tz=ORBIT.cz;
+    orbitCenterX=ORBIT.cx; orbitCenterY=ORBIT.cy; orbitCenterZ=ORBIT.cz;
     radius=ORBIT.r*1.5;
     theta=0; phi=Math.PI*0.4;
     applyCam();
+  }
+};
+
+window.setOrbitData=function(data){
+  ORBIT=data;
+  if(ORBIT){
+    ORBIT={cx:ORBIT.cx,cy:-ORBIT.cy,cz:-ORBIT.cz,r:ORBIT.r,nx:ORBIT.nx,ny:-ORBIT.ny,nz:-ORBIT.nz};
+    if(pathMode==='orbit')setMode('orbit');
   }
 };
 
@@ -736,7 +841,10 @@ canvas.addEventListener('touchmove',function(e){e.preventDefault();if(e.touches.
 canvas.addEventListener('touchend',function(e){saveTouches(e);if(e.touches.length<2){lastPinch=0;lastMX=0;lastMY=0;}});
 
 // Compose-called functions
-window.resetView=function(){theta=initTheta;phi=initPhi;radius=initRadius;tx=initTx;ty=initTy;tz=initTz;pathIdx=0;applyCam();};
+window.exportView=function(){return [theta,phi,radius,tx,ty,tz,pathDistance,pathMode].join(',');};
+window.restoreView=function(state){var v=String(state).split(',');if(v.length<8)return;theta=+v[0];phi=+v[1];radius=+v[2];tx=+v[3];ty=+v[4];tz=+v[5];pathDistance=+v[6];pathMode=v[7];applyCam();};
+window.resetView=function(){theta=initTheta;phi=initPhi;radius=initRadius;tx=initTx;ty=initTy;tz=initTz;pathDistance=0;applyCam();};
+window.disposeViewer=function(){if(app){app.destroy();app=null;camEnt=null;}};
 window.orbitView=function(dx,dy){
   theta-=dx*0.002;phi-=dy*0.002;applyCam();
 };
@@ -765,25 +873,14 @@ pc.createGraphicsDevice(canvas,{deviceTypes:[],antialias:false,depth:true,stenci
     var asset=new pc.Asset('splat','gsplat',{url:PLY,filename:'model.ply'});
     asset.on('progress',function(rcv,len){var pct=Math.round(rcv/Math.max(1,len)*100);loadingText.textContent='Loading... '+pct+'%';loadingBar.style.width=pct+'%';});
     asset.on('load',function(){
-      var ent=new pc.Entity('gsplat');ent.addComponent('gsplat',{asset:asset,unified:true});app.root.addChild(ent);
-      try{var r=asset.resource;if(r&&r.splat){var s=r.splat;tx=s.centerX||0;ty=s.centerY||0;tz=s.centerZ||0;var hx=s.halfExtentsX||1,hy=s.halfExtentsY||1,hz=s.halfExtentsZ||1;var sz=Math.sqrt(hx*hx+hy*hy+hz*hz)*2;radius=Math.max(0.1,sz*0.8);}}catch(e){}
+      var ent=new pc.Entity('gsplat');ent.addComponent('gsplat',{asset:asset,unified:true});ent.setLocalEulerAngles(180,0,0);app.root.addChild(ent);
+      try{var r=asset.resource;if(r&&r.splat){var s=r.splat;tx=s.centerX||0;ty=-(s.centerY||0);tz=-(s.centerZ||0);var hx=s.halfExtentsX||1,hy=s.halfExtentsY||1,hz=s.halfExtentsZ||1;var sz=Math.sqrt(hx*hx+hy*hy+hz*hz)*2;sceneRadius=Math.max(0.1,sz*0.5);radius=Math.max(0.1,sz*0.8);pathBackOffset=Math.max(sceneRadius*0.42,0.25);pathUpOffset=Math.max(sceneRadius*0.16,0.1);if(!ORBIT){ORBIT={cx:tx,cy:ty,cz:tz,r:sceneRadius};}}}catch(e){}
       initTheta=theta;initPhi=phi;initRadius=radius;initTx=tx;initTy=ty;initTz=tz;
-      // Jump to first pose if poses available
-      if(POSES&&POSES.length>0){
-        var p=POSES[0];
-        tx=p.px;ty=p.py;tz=p.pz;
-        var fxf=p.fx,fyf=p.fy,fzf=p.fz;
-        var flf=Math.sqrt(fxf*fxf+fyf*fyf+fzf*fzf)||1;
-        fxf/=flf;fyf/=flf;fzf/=flf;
-        theta=Math.atan2(fzf,fxf);
-        phi=Math.acos(Math.max(-1,Math.min(1,fyf)));
-        pathIdx=0;lastPathTime=0;
-        if(ORBIT){
-          tx=ORBIT.cx; ty=ORBIT.cy; tz=ORBIT.cz;
-          radius=ORBIT.r*1.5; theta=0; phi=Math.PI*0.4;
-        }
-      }
-      applyCam();loadingEl.style.display='none';
+      prepareClosedPath();
+      if(pathMode==='orbit'&&ORBIT){setMode('orbit');}
+      else if(pathMode==='path'&&POSES&&POSES.length>0){pathDistance=0;lastPathTime=0;applyPathDistance(true);}
+      else{applyCam();}
+      loadingEl.style.display='none';
     });
     asset.on('error',function(err){loadingText.textContent='GS failed: '+err;loadingBar.style.width='100%';loadingBar.style.background='rgba(255,100,100,0.6)';});
     app.assets.add(asset);app.assets.load(asset);

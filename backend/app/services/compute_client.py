@@ -69,6 +69,8 @@ class SpaceAnalyzeJob:
     partition: DataPartition
     video_path: Optional[str]
     imu_path: Optional[str]
+    scene_type: Optional[str] = None
+    recording_duration_sec: float = 0.0
     job_id: str = field(default_factory=lambda: f"job-{uuid4()}")
 
 
@@ -174,7 +176,12 @@ class HttpComputeClient(ComputeClient):
                 "memory_id": str(job.memory_id),
                 "session_id": str(job.session_id),
                 "partition": job.partition.value,
-                "inputs": {"video_path": job.video_path, "imu_path": job.imu_path},
+                "inputs": {
+                    "video_path": job.video_path,
+                    "imu_path": job.imu_path,
+                    "scene_type": job.scene_type,
+                    "recording_duration_sec": job.recording_duration_sec,
+                },
                 "callback_url": self._callback_url("space"),
             },
             f"session={job.session_id} memory={job.memory_id} type=space",
@@ -375,6 +382,10 @@ async def apply_space_result(
     }
     quality = quality_map.get(result.get("quality"), None)
 
+    # 单一物体 anchor 坐标（COLMAP 世界坐标系）——手机端物体环绕模式需要。
+    anchor = result.get("anchor") or {}
+    anchor_pos = anchor.get("position") or {}
+
     await repo.update_space_memory(
         memory_id,
         status=MemoryStatus.COMPLETED,
@@ -384,15 +395,34 @@ async def apply_space_result(
         loop_angle=result.get("loop_angle"),
         scene_summary=result.get("scene_summary"),
         identify_brief=result.get("identify_brief") or None,
+        # 位姿轨迹 + anchor 相关字段（compute FastGS 产出），手机端渲染依赖：
+        poses_url=result.get("poses_url"),
+        poses_sha256=result.get("poses_sha256"),
+        pose_count=result.get("pose_count"),
+        anchor_url=result.get("anchor_url"),
+        anchor_sha256=result.get("anchor_sha256"),
+        anchor_method=anchor.get("method") or result.get("anchor_method"),
+        anchor_position_x=float(anchor_pos.get("x", 0.0)),
+        anchor_position_y=float(anchor_pos.get("y", 0.0)),
+        anchor_position_z=float(anchor_pos.get("z", 0.0)),
+        # scene_type/recording_duration_sec 在创建时已写入，回调可覆盖为算力算出的准确值。
+        scene_type=result.get("scene_type") or memory.scene_type,
+        recording_duration_sec=float(
+            result.get("recording_duration_sec") or memory.recording_duration_sec or 0.0
+        ),
     )
     if memory.session_id:
         await repo.link_session_memory(memory.session_id, memory_id, MemoryStatus.COMPLETED)
 
-    # anchors 结构未与实现方钉死，且 SpaceMemoryORM.anchors 需要专门的 JSON 序列化写法，
-    # 本期先只记日志，落库留给阶段四正式接入 /analyze/space 时一起做。
+    # anchors（多锚点列表）结构未与实现方钉死，且 SpaceMemoryORM.anchors 需要专门的 JSON 序列化写法，
+    # 本期先只记日志，落库留给后续接入时一起做。
     if result.get("anchors"):
         log.info(
-            "空间记忆回调含 anchors(占位,暂不落库) memory=%s count=%d",
+            "空间记忆回调含 anchors 列表(占位,暂不落库) memory=%s count=%d",
             memory_id, len(result.get("anchors") or []),
         )
-    log.info("空间记忆分析回调完成 memory=%s session=%s", memory_id, memory.session_id)
+    log.info(
+        "空间记忆分析回调完成 memory=%s session=%s poses=%s anchor_method=%s scene_type=%s",
+        memory_id, memory.session_id, result.get("pose_count"),
+        anchor.get("method"), result.get("scene_type"),
+    )

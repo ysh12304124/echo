@@ -91,10 +91,7 @@ class VoiceQueryRecorder {
         val recorder = audioRecord ?: return@withContext ByteArray(0)
         closing = true
         audioRecord = null
-        try {
-            recorder.stop()
-        } catch (_: Throwable) {
-        }
+        try { recorder.stop() } catch (_: Throwable) { }
         try {
             readJob?.cancelAndJoin()
         } catch (error: Throwable) {
@@ -104,19 +101,14 @@ class VoiceQueryRecorder {
             safeRelease(recorder)
             closing = false
         }
-        return@withContext synchronized(lock) {
-            buffer.toByteArray().also { buffer.reset() }
-        }
+        synchronized(lock) { buffer.toByteArray().also { buffer.reset() } }
     }
 
     suspend fun cancelAndDiscard() = withContext(Dispatchers.IO) {
         val recorder = audioRecord ?: return@withContext
         closing = true
         audioRecord = null
-        try {
-            recorder.stop()
-        } catch (_: Throwable) {
-        }
+        try { recorder.stop() } catch (_: Throwable) { }
         try {
             readJob?.cancelAndJoin()
         } catch (error: Throwable) {
@@ -139,13 +131,8 @@ class VoiceQueryRecorder {
         val job = readJob
         readJob = null
         scope.launch {
-            try {
-                recorder.stop()
-            } catch (_: Throwable) {
-            }
-            try {
-                job?.cancelAndJoin()
-            } catch (error: Throwable) {
+            try { recorder.stop() } catch (_: Throwable) { }
+            try { job?.cancelAndJoin() } catch (error: Throwable) {
                 EchoLog.w("语音查询后台取消读取任务异常: ${error.message}")
             } finally {
                 safeRelease(recorder)
@@ -156,15 +143,13 @@ class VoiceQueryRecorder {
     }
 
     private fun safeRelease(recorder: AudioRecord) {
-        try {
-            recorder.release()
-        } catch (error: Throwable) {
+        try { recorder.release() } catch (error: Throwable) {
             EchoLog.w("语音查询录音释放异常: ${error.message}")
         }
     }
 
     companion object {
-        const val SAMPLE_RATE = 16000
+        const val SAMPLE_RATE = 16_000
         const val MAX_SECONDS = 60
         const val MIN_DURATION_MS = 500
         const val MAX_BYTES = SAMPLE_RATE * 2 * MAX_SECONDS

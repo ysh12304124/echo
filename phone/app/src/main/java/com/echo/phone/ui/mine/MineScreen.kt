@@ -38,6 +38,7 @@ fun MineScreen(
     onNavigateQualityTime: () -> Unit,
     onNavigateDevice: () -> Unit,
     onNavigateStorage: () -> Unit,
+    onNavigateSettings: () -> Unit,
     onNavigateHelp: () -> Unit,
     onNavigateDiagnostics: () -> Unit,
     onNavigateFavorites: () -> Unit,
@@ -75,6 +76,8 @@ fun MineScreen(
                 MineItem(Icons.Default.Star, "收藏", "已收藏的记忆与空间", onClick = onNavigateFavorites)
                 HorizontalDivider(color = GlassBorder)
                 MineItem(Icons.Default.Storage, "存储与隐私", "删除、导出、权限管理", onClick = onNavigateStorage)
+                HorizontalDivider(color = GlassBorder)
+                MineItem(Icons.Default.Settings, "设置", "后端切换与开发者选项", onClick = onNavigateSettings)
                 HorizontalDivider(color = GlassBorder)
                 MineItem(Icons.AutoMirrored.Filled.Help, "帮助与说明", "LED 含义、查询范围说明", onClick = onNavigateHelp)
                 HorizontalDivider(color = GlassBorder)

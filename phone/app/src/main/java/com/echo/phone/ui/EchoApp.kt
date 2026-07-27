@@ -32,6 +32,8 @@ import com.echo.phone.ui.mine.DeviceScreen
 import com.echo.phone.ui.mine.DiagnosticsLogScreen
 import com.echo.phone.ui.mine.HelpScreen
 import com.echo.phone.ui.mine.MineScreen
+import com.echo.phone.ui.mine.DevOptionsScreen
+import com.echo.phone.ui.mine.SettingsScreen
 import com.echo.phone.ui.mine.StorageScreen
 import com.echo.phone.ui.onboarding.OnboardingScreen
 import com.echo.phone.ui.persons.PersonsScreen
@@ -119,6 +121,7 @@ fun EchoApp() {
                     onNavigateSpaces = { navController.navigate(Routes.SPACES) },
                     onNavigateDevice = { navController.navigate(Routes.DEVICE) },
                     onNavigateStorage = { navController.navigate(Routes.STORAGE) },
+                    onNavigateSettings = { navController.navigate(Routes.SETTINGS) },
                     onNavigateHelp = { navController.navigate(Routes.HELP) },
                     onNavigateDiagnostics = { navController.navigate(Routes.DIAGNOSTICS) },
                     onNavigateFavorites = { navController.navigate(Routes.FAVORITES) },
@@ -145,6 +148,15 @@ fun EchoApp() {
             }
             composable(Routes.FAVORITES) {
                 HomeScreen(favoritesOnly = true, title = "收藏", onNavigateMemory = { id -> navController.navigate(Routes.memoryDetail(id)) }, onNavigateSpace = { id -> navController.navigate(Routes.spaceDetail(id)) })
+            }
+            composable(Routes.SETTINGS) {
+                SettingsScreen(
+                    onBack = { navController.popBackStack() },
+                    onNavigateDevOptions = { navController.navigate(Routes.DEV_OPTIONS) }
+                )
+            }
+            composable(Routes.DEV_OPTIONS) {
+                DevOptionsScreen(onBack = { navController.popBackStack() })
             }
         }
     }

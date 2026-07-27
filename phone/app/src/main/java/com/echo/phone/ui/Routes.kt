@@ -15,6 +15,8 @@ object Routes {
     const val HELP = "help"
     const val DIAGNOSTICS = "diagnostics"
     const val FAVORITES = "favorites"
+    const val SETTINGS = "settings"
+    const val DEV_OPTIONS = "dev_options"
 
     fun memoryDetail(id: String) = "memory/$id"
     fun spaceDetail(id: String) = "space/$id"

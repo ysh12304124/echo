@@ -1,24 +1,31 @@
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-backend/data/
-*.db
 
 # Android
-*.iml
-.gradle/
-local.properties
-.idea/
+backend/data/
 build/
 captures/
-.externalNativeBuild/
+compute/log/
+compute/models/
+compute/nohup.out
 .cxx/
-
-# OS
+*.db
 .DS_Store
-*.log
-
+.externalNativeBuild/
+glasses/gradlew.bat
+glasses/gradle/wrapper/gradle-wrapper.jar
+glasses/wrapper/
+.gradle/
 # IDE
-.vscode/
+.idea/
+*.iml
+local.properties
+*.log
+# OS
+phone/gradle/
+phone/gradlew
+phone/gradlew.bat
 *.pid
+__pycache__/
+*.py[cod]
+# Python
+.venv/
+.vscode/

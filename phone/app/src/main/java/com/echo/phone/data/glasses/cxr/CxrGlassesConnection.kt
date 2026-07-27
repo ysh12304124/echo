@@ -323,6 +323,16 @@ class CxrGlassesConnection(
         }
     }
 
+    override suspend fun setSpaceCapture(on: Boolean) {
+        EchoLog.i("向眼镜发送 space_toggle=${if (on) "on" else "off"}")
+        runCatching {
+            cxrLink?.sendCustomCmd(
+                "rk_custom_client",
+                Caps().apply { write("space_toggle"); write(if (on) "on" else "off") },
+            )
+        }
+    }
+
     // ---- SDK 回调 ----
 
     private val customCmdCallback = object : ICustomCmdCbk {

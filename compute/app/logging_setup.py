@@ -36,13 +36,9 @@ def setup_logging(level: int = logging.INFO) -> logging.Logger:
     )
     file_handler.setFormatter(fmt)
 
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(fmt)
-
     logger.setLevel(level)
     logger.handlers.clear()
     logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
     logger.propagate = False
 
     _configured = True

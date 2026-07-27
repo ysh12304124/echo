@@ -69,7 +69,10 @@ fun SpaceLibraryScreen(onBack: () -> Unit, onOpenSpace: (String) -> Unit) {
                             .clickable { onOpenSpace(space.spaceId) },
                     ) {
                         Column(Modifier.padding(16.dp)) {
-                            Text(space.title.ifBlank { space.identifyBrief }, style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                space.sceneSummary.ifBlank { space.title.ifBlank { space.identifyBrief } },
+                                style = MaterialTheme.typography.titleSmall,
+                            )
                             Text("质量: ${space.quality ?: "未知"}", style = MaterialTheme.typography.labelSmall)
                         }
                     }

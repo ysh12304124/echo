@@ -61,7 +61,8 @@ def test_align_colmap_model_writes_new_directory_and_rotates_model(tmp_path):
     image = read_images_binary(output / "sparse" / "0" / "images.bin")[1]
     point = read_points3d_binary(output / "sparse" / "0" / "points3D.bin")[1]
     np.testing.assert_allclose(image.tvec, [1., 2., 3.])
-    np.testing.assert_allclose(point.xyz, [-1., 3., 2.])
+    # rotation_to_target uses the minimum-angle proper rotation from +Z to +Y.
+    np.testing.assert_allclose(point.xyz, [1., 3., -2.])
     assert read_points3d_binary(raw / "sparse" / "0" / "points3D.bin")[1].xyz.tolist() == [1., 2., 3.]
 
 

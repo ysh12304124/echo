@@ -20,6 +20,7 @@ from utils.sh_utils import RGB2SH
 from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
+from utils.pruning_utils import online_prune_mask
 
 try:
     from diff_gaussian_rasterization import SparseGaussianAdam
@@ -538,3 +539,19 @@ class GaussianModel:
         scores_mask = pruning_score > 0.9
         final_prune = torch.logical_or(prune_mask, scores_mask)
         self.prune_points(final_prune)
+
+    def online_prune(self, camera_centers, scene_extent, min_opacity, margin, max_scale_ratio):
+        prune_mask = online_prune_mask(
+            self.get_xyz,
+            self.get_scaling,
+            self.get_opacity,
+            camera_centers,
+            scene_extent,
+            min_opacity,
+            margin,
+            max_scale_ratio,
+        )
+        removed = int(prune_mask.sum().item())
+        if removed:
+            self.prune_points(prune_mask)
+        return removed

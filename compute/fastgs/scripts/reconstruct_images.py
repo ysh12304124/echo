@@ -57,10 +57,10 @@ def build_commands(
     iterations: int,
     python_executable: str = "python",
     conda_executable: str = "conda",
-    colmap_executable: str = "/home/liangjiahua/colmap-cuda-ceres/bin/colmap",
+    colmap_executable: str = "/home/asus/opt/colmap-cuda-ceres/bin/colmap",
     colmap_new_api: bool = True,
     mapper_use_gpu: bool = True,
-    cuda_lib_dir: Optional[str] = "/home/liangjiahua/miniconda3/envs/dgsg/targets/x86_64-linux/lib",
+    cuda_lib_dir: Optional[str] = "/usr/local/cuda-12.8/lib64",
     matching_use_gpu: bool = True,
     max_num_features: int = 8192,
     feature_use_gpu: bool = False,
@@ -478,6 +478,9 @@ def run_job(args: argparse.Namespace) -> int:
         matching_gpu=args.matching_gpu,
         mapper_gpu=args.mapper_use_gpu,
         cuda_lib_dir=args.cuda_lib_dir,
+        prune_max_ratio=getattr(args, "prune_max_ratio", 0.01),
+        prune_finetune_iterations=getattr(args, "prune_finetune_iterations", 800),
+        prune_evaluate_psnr=getattr(args, "prune_evaluate_psnr", True),
     )
     return run_pipeline(pipeline_args)
 
@@ -493,7 +496,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     parser.add_argument("--job-id")
     parser.add_argument("--colmap-executable", dest="colmap_executable",
-                        default=os.getenv("FASTGS_COLMAP_EXECUTABLE", "/home/liangjiahua/colmap-cuda-ceres/bin/colmap"))
+                        default=os.getenv("FASTGS_COLMAP_EXECUTABLE", "/home/asus/opt/colmap-cuda-ceres/bin/colmap"))
     parser.add_argument("--colmap_new_api", action="store_true",
                         default=os.getenv("FASTGS_COLMAP_NEW_API", "1") == "1")
     parser.add_argument("--mapper_use_gpu", action="store_true",
@@ -505,9 +508,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_num_features", type=int,
                         default=int(os.getenv("FASTGS_MAX_NUM_FEATURES", "8192")))
     parser.add_argument("--cuda-lib-dir",
-                        default=os.getenv("FASTGS_CUDA_LIB_DIR", "/home/liangjiahua/miniconda3/envs/dgsg/targets/x86_64-linux/lib"))
+                        default=os.getenv("FASTGS_CUDA_LIB_DIR", "/usr/local/cuda-12.8/lib64"))
     parser.add_argument("--allow-alignment-fallback", action="store_true")
-    parser.add_argument("--resume-from", choices=("colmap", "alignment", "fastgs", "export"))
+    parser.add_argument("--resume-from", choices=("colmap", "alignment", "fastgs", "prune", "export"))
+    parser.add_argument("--prune-max-ratio", dest="prune_max_ratio", type=float, default=0.01)
+    parser.add_argument("--prune-finetune-iterations", dest="prune_finetune_iterations", type=int, default=800)
+    parser.add_argument("--prune-evaluate-psnr", dest="prune_evaluate_psnr", action="store_true", default=True)
     args = parser.parse_args()
     return args
 

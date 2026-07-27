@@ -109,6 +109,14 @@ interface EchoApiService {
     @POST("query")
     suspend fun query(@Body request: QueryRequest): QueryResponseDto
 
+    @Multipart
+    @POST("query/voice/transcribe")
+    suspend fun transcribeVoice(@Part file: MultipartBody.Part): VoiceTranscriptionResponseDto
+
+    @Multipart
+    @POST("query/voice")
+    suspend fun queryVoice(@Part file: MultipartBody.Part): VoiceQueryResponseDto
+
     @GET("persons")
     suspend fun listPersons(@Query("partition") partition: String? = null): PersonListDto
 
@@ -145,6 +153,7 @@ interface EchoApiService {
 data class CreateSessionRequest(
     val memory_type: String,
     val scene: String? = null,
+    val scene_type: String? = null,
     val partition: String = "work",
     val title: String = "",
 )
@@ -290,6 +299,8 @@ data class SpaceMemoryDetailDto(
     val poses_url: String? = null,
     val anchor: AnchorDto? = null,
     val recording_duration_sec: Float = 0f,
+    val scene_summary: String? = null,
+    val loop_angle: Float? = null,
 )
 
 data class SpaceListDto(val items: List<SpaceMemoryDetailDto>, val total: Int)
@@ -324,6 +335,23 @@ data class QueryResponseDto(
     val evidences: List<QueryEvidenceDto>,
     val sources: List<QuerySourceDto>? = null,
     val uncertainty_reason: String?,
+)
+
+data class VoiceTranscriptionResponseDto(
+    val transcript: String,
+    val duration_ms: Int,
+    val asr_avg_logprob: Double?,
+    val asr_accepted: Boolean,
+    val rejection_reason: String?,
+)
+
+data class VoiceQueryResponseDto(
+    val transcript: String,
+    val duration_ms: Int,
+    val asr_avg_logprob: Double?,
+    val asr_accepted: Boolean,
+    val rejection_reason: String?,
+    val result: QueryResponseDto?,
 )
 
 data class PersonListDto(val items: List<PersonSummaryDto>, val total: Int)
@@ -511,7 +539,18 @@ fun SpaceMemoryDetailDto.toDomain() = SpaceMemoryDetail(
     isLocked = is_locked,
     keyFrames = key_frames?.map { KeyFrame(mediaUrl = it.media_url, filename = it.filename, frameIndex = it.frame_index, timestampMs = it.timestamp_ms) } ?: emptyList(),
     anchors = anchors?.map {
-        SpaceAnchor(anchorId = it.anchor_id, name = it.name, anchorType = it.anchor_type)
+        SpaceAnchor(
+            anchorId = it.anchor_id,
+            name = it.name,
+            anchorType = it.anchor_type,
+            position = it.position?.let { pos ->
+                AnchorPoint(
+                    x = (pos["x"] ?: 0.0).toFloat(),
+                    y = (pos["y"] ?: 0.0).toFloat(),
+                    z = (pos["z"] ?: 0.0).toFloat(),
+                )
+            },
+        )
     } ?: emptyList(),
     capturedAt = captured_at,
     sceneType = scene_type,
@@ -525,6 +564,8 @@ fun SpaceMemoryDetailDto.toDomain() = SpaceMemoryDetail(
         )
     },
     recordingDurationSec = recording_duration_sec,
+    sceneSummary = scene_summary.orEmpty(),
+    loopAngle = loop_angle,
 )
 
 fun QueryResponseDto.toDomain() = QueryResult(
@@ -550,6 +591,23 @@ fun QueryResponseDto.toDomain() = QueryResult(
         )
     } ?: emptyList(),
     uncertaintyReason = uncertainty_reason,
+)
+
+fun VoiceQueryResponseDto.toDomain() = VoiceQueryResult(
+    transcript = transcript,
+    durationMs = duration_ms,
+    asrAvgLogprob = asr_avg_logprob,
+    asrAccepted = asr_accepted,
+    rejectionReason = rejection_reason,
+    result = result?.toDomain(),
+)
+
+fun VoiceTranscriptionResponseDto.toDomain() = VoiceTranscriptionResult(
+    transcript = transcript,
+    durationMs = duration_ms,
+    asrAvgLogprob = asr_avg_logprob,
+    asrAccepted = asr_accepted,
+    rejectionReason = rejection_reason,
 )
 
 fun PersonSummaryDto.toDomain() = PersonSummary(

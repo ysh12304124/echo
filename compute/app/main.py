@@ -16,6 +16,7 @@ from app.analyze.audio import run_audio_analysis
 from app.analyze.space_memory import run_space_analysis
 from app.analyze.time_memory import run_time_analysis
 from app.logging_setup import get_logger, setup_logging
+from app.settings import get_settings
 
 setup_logging()
 log = get_logger("main")
@@ -23,7 +24,7 @@ log = get_logger("main")
 app = FastAPI(
     title="Echo Compute Service",
     version="1.0.0",
-    description="识境 Echo 算力服务：音频转写(真实实现) + 时间/空间记忆分析(桩实现)",
+    description="识境 Echo 算力服务：音频转写 + FastGS 空间重建",
 )
 
 
@@ -54,10 +55,22 @@ async def analyze_audio(req: AnalyzeRequest, background: BackgroundTasks) -> Ana
 @app.post("/analyze/time", response_model=AnalyzeAck, status_code=202)
 async def analyze_time(req: AnalyzeRequest, background: BackgroundTasks) -> AnalyzeAck:
     log.info(
-        "session=%s 收到时间记忆分析任务(桩) job=%s memory=%s", req.session_id, req.job_id, req.memory_id
+        "session=%s 收到时间记忆分析任务 job=%s memory=%s video=%s audio_chunks=%d",
+        req.session_id,
+        req.job_id,
+        req.memory_id,
+        req.inputs.get("video_path"),
+        len(req.inputs.get("audio_paths") or []),
     )
+    time_inputs = dict(req.inputs)
+    time_inputs["callback_token"] = get_settings().internal_token
     background.add_task(
-        run_time_analysis, req.job_id, req.memory_id, req.session_id, req.inputs, req.callback_url
+        run_time_analysis,
+        req.job_id,
+        req.memory_id,
+        req.session_id,
+        time_inputs,
+        req.callback_url,
     )
     return AnalyzeAck(job_id=req.job_id)
 
@@ -65,7 +78,7 @@ async def analyze_time(req: AnalyzeRequest, background: BackgroundTasks) -> Anal
 @app.post("/analyze/space", response_model=AnalyzeAck, status_code=202)
 async def analyze_space(req: AnalyzeRequest, background: BackgroundTasks) -> AnalyzeAck:
     log.info(
-        "session=%s 收到空间记忆分析任务(桩) job=%s memory=%s", req.session_id, req.job_id, req.memory_id
+        "session=%s 收到空间 FastGS 重建任务 job=%s memory=%s", req.session_id, req.job_id, req.memory_id
     )
     background.add_task(
         run_space_analysis, req.job_id, req.memory_id, req.session_id, req.inputs, req.callback_url

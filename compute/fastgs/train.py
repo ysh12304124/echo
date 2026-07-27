@@ -62,6 +62,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
     bg = torch.rand((3), device="cuda") if opt.random_background else background
+    camera_centers = torch.stack([camera.camera_center for camera in scene.getTrainCameras()])
+
+    def run_online_pruning(iteration):
+        removed = gaussians.online_prune(
+            camera_centers,
+            scene.cameras_extent,
+            opt.online_prune_min_opacity,
+            opt.online_prune_margin,
+            opt.online_prune_max_scale_ratio,
+        )
+        print("[ITER {}] Online pruning removed {} Gaussians; {} remain".format(
+            iteration, removed, gaussians.get_xyz.shape[0]))
 
     for iteration in range(first_iter, opt.iterations + 1):
 
@@ -115,12 +127,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             iter_time = iter_start.elapsed_time(iter_end)
-            # Log and save
-            # training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_time, testing_iterations, scene, render_fastgs, (pipe, background, opt.mult))
-            if (iteration in saving_iterations):
-                print("\n[ITER {}] Saving Gaussians".format(iteration))
-                scene.save(iteration)
-            
             optim_start.record()
             
             # Densification
@@ -147,15 +153,35 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
 
-            # The multiview consistent pruning of fastgs. We do it every 3k iterations after 15k
-            # In this stage, the model converge basically. So we can prune more aggressively without degrading rendering quality.
-            # You can check the rendering results of 20K iterations in arxiv version (https://arxiv.org/abs/2511.04283), the rendering quality is already very good.
-            if iteration % 3000 == 0 and iteration > 15_000 and iteration < 30_000:
+            # This photometric-only pruning is intentionally opt-in. The default
+            # cleanup path is the post-training geometric pruning script.
+            if (
+                opt.final_prune_interval > 0
+                and iteration % opt.final_prune_interval == 0
+                and iteration > opt.densify_until_iter
+                and iteration < opt.iterations
+            ):
                 my_viewpoint_stack = scene.getTrainCameras().copy()
                 camlist = sampling_cameras(my_viewpoint_stack)
 
                 _, pruning_score = compute_gaussian_score_fastgs(camlist, gaussians, pipe, bg, opt)                    
                 gaussians.final_prune_fastgs(min_opacity = 0.1, pruning_score = pruning_score)
+
+            if (
+                opt.online_prune_interval > 0
+                and iteration >= opt.online_prune_start_iter
+                and (
+                    iteration % opt.online_prune_interval == 0
+                    or iteration == opt.iterations
+                )
+            ):
+                run_online_pruning(iteration)
+
+            # Save after every pruning stage so the final PLY cannot include unpruned outliers.
+            # training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_time, testing_iterations, scene, render_fastgs, (pipe, background, opt.mult))
+            if iteration in saving_iterations:
+                print("\n[ITER {}] Saving Gaussians".format(iteration))
+                scene.save(iteration)
         
             # Optimization step
             if iteration < opt.iterations:

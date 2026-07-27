@@ -37,8 +37,8 @@ class ComputeSettings(BaseSettings):
     fastgs_conda_executable: str = "/home/asus/miniconda3/bin/conda"
     # COLMAP 二进制路径（apt 装的默认在 /usr/bin/colmap）。
     fastgs_colmap_executable: str = "/usr/bin/colmap"
-    # FastGS 训练迭代次数（3000 快速验证，30000 高质量）。
-    fastgs_train_iterations: int = 3000
+    # FastGS 正式训练迭代次数（30000 高质量）。
+    fastgs_train_iterations: int = 30000
     # 视频抽帧帧率（fps）。经验：15fps 对普通手持视频足够 COLMAP 特征匹配。
     fastgs_extract_fps: int = 15
     # FastGS 单次任务的最大用时（秒）。
@@ -47,6 +47,8 @@ class ComputeSettings(BaseSettings):
     fastgs_colmap_use_gpu: bool = False
     # 特征提取的最大特征数上限（FastGS 默认 8192）。
     fastgs_max_num_features: int = 8192
+    # IMU JSONL 中加速度的语义；手机/眼镜采集默认使用含重力的加速度。
+    imu_acceleration_type: str = "gravity"
     # 工作根目录，每个 job 用 <root>/<job_id>/ 作为独立工作区。
     fastgs_work_root: str = "/tmp/echo-fastgs"
 

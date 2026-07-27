@@ -16,6 +16,7 @@ def test_build_commands_keeps_explicit_gpu_override_available():
         colmap_new_api=True,
         mapper_use_gpu=True,
         cuda_lib_dir="/home/liangjiahua/miniconda3/envs/dgsg/targets/x86_64-linux/lib",
+        feature_use_gpu=True,
     )
 
     assert "--colmap_executable" in commands.colmap
@@ -33,7 +34,7 @@ def test_default_production_commands_use_hybrid_gpu_pipeline():
         iterations=30000,
     )
 
-    assert "/home/liangjiahua/colmap-cuda-ceres/bin/colmap" in commands.colmap
+    assert "/home/asus/opt/colmap-cuda-ceres/bin/colmap" in commands.colmap
     assert "--colmap_new_api" in commands.colmap
     assert "--no_gpu" in commands.colmap
     assert "--matching_gpu" in commands.colmap

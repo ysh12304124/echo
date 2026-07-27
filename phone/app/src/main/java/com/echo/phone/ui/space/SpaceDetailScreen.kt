@@ -297,7 +297,14 @@ fun SpaceDetailScreen(spaceId: String, onBack: () -> Unit) {
                     else -> "质量：未知"
                 }
                 Text(qualityLabel, style = MaterialTheme.typography.labelLarge)
-                Text(space.identifyBrief, style = MaterialTheme.typography.bodyLarge)
+                if (space.sceneSummary.isNotBlank()) {
+                    Text(space.sceneSummary, style = MaterialTheme.typography.bodyLarge)
+                } else {
+                    Text(space.identifyBrief, style = MaterialTheme.typography.bodyLarge)
+                }
+                space.loopAngle?.let { angle ->
+                    Text("环绕角度：${"%.1f".format(angle)}°", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
 
                 Spacer(Modifier.height(16.dp))
 
@@ -350,7 +357,10 @@ fun SpaceDetailScreen(spaceId: String, onBack: () -> Unit) {
                     space.anchors.forEach { a ->
                         ListItem(
                             headlineContent = { Text(a.name) },
-                            supportingContent = { Text(a.anchorType) },
+                            supportingContent = {
+                                val posText = a.position?.let { "(%.2f, %.2f, %.2f)".format(it.x, it.y, it.z) }
+                                Text(listOfNotNull(a.anchorType, posText).joinToString(" · "))
+                            },
                         )
                     }
                     Spacer(Modifier.height(16.dp))

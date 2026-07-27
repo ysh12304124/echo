@@ -15,7 +15,7 @@ android {
         versionCode = 1
         versionName = "1.0.0"
         // psh 分支后台运行在 192.168.0.153；模拟器仍可使用 10.0.2.2。
-        buildConfigField("String", "API_BASE_URL", "\"http://192.168.0.153:8000/api/v1/\"")
+        buildConfigField("String", "API_BASE_URL", "\"http://192.168.0.153:8001/api/v1/\"")
 
         // 眼镜端 Echo CustomApp 的包名与入口（须与 glasses/ 模块一致）。
         buildConfigField("String", "GLASS_APP_PACKAGE", "\"com.echo.glasses\"")

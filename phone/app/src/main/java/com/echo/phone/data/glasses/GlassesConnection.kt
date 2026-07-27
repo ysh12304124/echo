@@ -41,6 +41,9 @@ interface GlassesConnection {
 
     /** 后台 complete 成功后通知眼镜端记忆已完成（眼镜端据此可清理本地视频，当前阶段仅记录日志）。 */
     suspend fun sendMemoryComplete(sid: String)
+
+    /** 通知眼镜端开启/关闭空间记忆采集（IMU 数据流）。 */
+    suspend fun setSpaceCapture(on: Boolean)
 }
 
 /**
@@ -94,6 +97,8 @@ class MockGlassesConnection(
     }
 
     override suspend fun sendMemoryComplete(sid: String) {}
+
+    override suspend fun setSpaceCapture(on: Boolean) {}
 
     /** 测试注入：模拟眼镜端下发记忆控制指令。 */
     fun emitCommand(command: GlassCommand) {

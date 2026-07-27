@@ -107,6 +107,10 @@ class MainActivity : AppCompatActivity() {
             when(tag) {
                 "status"->runOnUiThread{ct.text="云端: $text"}
                 "memory_complete"->{ Log.i(TAG, "memory_complete sid=$text (暂不删除本地视频,便于测试对照)") }
+                "space_toggle"->{ // 手机端 startSpace/stopSpace 指令,开关 IMU 采集
+                    val on = text == "on"
+                    if (on != spaceOn) runOnUiThread { toggleSpace() }
+                }
             }
         }
     }

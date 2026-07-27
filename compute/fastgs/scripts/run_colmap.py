@@ -222,7 +222,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--job-dir", required=True)
     parser.add_argument("--fastgs-dir", required=True)
     parser.add_argument("--job-id")
-    parser.add_argument("--colmap-executable", default=os.getenv("FASTGS_COLMAP_EXECUTABLE", "/home/liangjiahua/colmap-cuda-ceres/bin/colmap"))
+    parser.add_argument("--colmap-executable", default=os.getenv("FASTGS_COLMAP_EXECUTABLE", "/home/asus/opt/colmap-cuda-ceres/bin/colmap"))
     parser.add_argument("--python-executable", default="python")
     parser.add_argument("--conda-executable", default="conda")
     parser.add_argument("--conda-env", default="fastgs")
@@ -233,7 +233,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mapper-gpu", action="store_true", default=os.getenv("FASTGS_MAPPER_USE_GPU", "1") == "1")
     parser.add_argument("--colmap-new-api", action="store_true", default=os.getenv("FASTGS_COLMAP_NEW_API", "1") == "1")
     parser.add_argument("--sequential", action="store_true", default=True)
-    parser.add_argument("--cuda-lib-dir", default=os.getenv("FASTGS_CUDA_LIB_DIR", "/home/liangjiahua/miniconda3/envs/dgsg/targets/x86_64-linux/lib"))
+    parser.add_argument("--cuda-lib-dir", default=os.getenv("FASTGS_CUDA_LIB_DIR", "/usr/local/cuda-12.8/lib64"))
     return parser.parse_args()
 
 

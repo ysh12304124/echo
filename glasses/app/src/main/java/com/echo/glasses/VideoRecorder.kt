@@ -76,11 +76,9 @@ class VideoRecorder(private val context: Context) {
         mr = MediaRecorder(context).apply {
             setVideoSource(MediaRecorder.VideoSource.SURFACE)
             setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            setVideoFrameRate(30); setVideoSize(1280, 720)
+            setVideoFrameRate(30); setVideoSize(2048, 1536)
             setVideoEncodingBitRate(2000000); setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-            // 眼镜摄像头传感器安装角度与画面上方不一致：实测画面需逆时针转 90° 才是正确视角，
-            // 即播放端应顺时针转 270°(等价于逆时针 90°)才能摆正，写入 tkhd 旋转矩阵而非重新编码。
-            setOrientationHint(270)
+            setOrientationHint(0)
             setOutputFile(f.absolutePath); prepare()
         }
     }
@@ -136,7 +134,15 @@ class VideoRecorder(private val context: Context) {
         if (!rec) return; rec = false
         hnd?.removeCallbacks(chunkTask)
         hnd?.post {
-            try { mr?.stop() } catch (_: Exception) {}
+            val stopped = runCatching { mr?.stop() }.isSuccess
+            if (!stopped) {
+                Log.e(TAG, "stop failed; refusing to publish an incomplete video")
+                runCatching { mr?.reset() }
+                mr?.release(); mr = null
+                runCatching { ses?.close() }
+                dev?.close(); dev = null; ses = null
+                return@post
+            }
             readAndEmit() // 收尾:mr.stop()后文件已落盘(含moov),把剩余字节发完
             try { mr?.reset() } catch (_: Exception) {}
             mr?.release(); mr = null

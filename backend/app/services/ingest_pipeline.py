@@ -23,9 +23,9 @@ from app.logging_setup import get_logger
 from app.providers import ProviderFactory, get_provider_factory
 from app.repositories.memory_repo import MemoryRepository
 from app.services.compute_client import (
-    AudioAnalyzeJob,
     ComputeClient,
     SpaceAnalyzeJob,
+    TimeAnalyzeJob,
     get_compute_client,
 )
 
@@ -137,18 +137,43 @@ class IngestPipeline:
                 return None
 
             tmp_path = await blob.get_path(tmp_key)
-            final_name = filename or f"{session_id}.mp4"
+            final_name = Path(filename or f"{session_id}.mp4").name
+            if not final_name or final_name in {".", ".."}:
+                raise ValueError("Invalid video filename")
+
             final_path: Optional[str] = None
             if tmp_path:
-                final_path_obj = Path(tmp_path).with_name(final_name)
-                Path(tmp_path).rename(final_path_obj)
+                tmp_file = Path(tmp_path)
+                if not tmp_file.is_file() or tmp_file.stat().st_size <= 0:
+                    raise ValueError("Video file is empty")
+                final_path_obj = tmp_file.with_name(final_name)
+                tmp_file.rename(final_path_obj)
                 final_path = str(final_path_obj)
-            await self.repo.update_session_video(session_id, final_path or "")
+            else:
+                # video_end may be retried by the glasses link. The first end
+                # already renamed current.tmp, so the retry must preserve the
+                # recorded path instead of overwriting it with an empty value.
+                existing_path = await self.repo.get_session_video_path(session_id)
+                if existing_path and Path(existing_path).is_file():
+                    final_path = existing_path
+                else:
+                    raise ValueError("Video end received before a video file was uploaded")
+
+            await self.repo.update_session_video(session_id, final_path)
             log.info(
                 "视频接收完成 session=%s filename=%s index=%d path=%s",
                 session_id, final_name, index, final_path,
             )
-            return final_path
+        return final_path
+
+    @staticmethod
+    def _require_video_file(video_path: Optional[str]) -> str:
+        if not video_path:
+            raise ValueError("时间记忆缺少视频文件，拒绝提交处理")
+        path = Path(video_path)
+        if not path.is_file() or path.stat().st_size <= 0:
+            raise ValueError(f"视频文件不存在或为空: {video_path}")
+        return str(path)
 
     async def patch_video_header(self, session_id: UUID, offset: int, data: bytes) -> None:
         """覆盖写视频临时文件头部，修正边录边发时已发出的、MediaRecorder 后续回改过的字节
@@ -182,16 +207,18 @@ class IngestPipeline:
         return await self._complete_space_session_store_only(session)
 
     async def _complete_time_session_store_only(self, session: IngestSession) -> TimeMemory:
-        """存储视频/音频后，把语音分析异步甩给算力服务(接口①A)，不在这里同步等结果。
+        """存储视频/音频后，把完整时间记忆分析异步甩给算力服务，不在这里同步等结果。
 
         立即创建 status=PROCESSING 的记忆并 return；算力服务处理完通过
-        /internal/callback/audio 回调本服务把转写写入证据、把状态置为 completed
-        （mock 模式下这一步会在 submit_audio 内同步完成，效果等同于"秒级完成"）。
+        /internal/callback/time 回调本服务把完整结果写入记忆并把状态置为 completed
+        （mock 模式下这一步会在 submit_time 内同步完成，效果等同于"秒级完成"）。
         """
         started_at = session.created_at
         ended_at = datetime.now(timezone.utc)
         duration = int((ended_at - _as_utc(started_at)).total_seconds())
-        video_path = await self.repo.get_session_video_path(session.id)
+        video_path = self._require_video_file(
+            await self.repo.get_session_video_path(session.id)
+        )
         _, audio_paths = await self.repo.get_session_media_paths(session.id)
 
         memory = TimeMemory(
@@ -213,14 +240,15 @@ class IngestPipeline:
             memory.id, session.id, duration, video_path, len(audio_paths),
         )
 
-        job = AudioAnalyzeJob(
+        job = TimeAnalyzeJob(
             memory_id=memory.id,
             session_id=session.id,
             partition=session.partition,
+            video_path=video_path,
             audio_paths=audio_paths,
         )
-        await self.compute_client.submit_audio(job)
-        log.info("语音分析任务已提交算力服务 session=%s memory=%s job=%s", session.id, memory.id, job.job_id)
+        await self.compute_client.submit_time(job)
+        log.info("时间记忆分析任务已提交算力服务 session=%s memory=%s job=%s video=%s audio_chunks=%d", session.id, memory.id, job.job_id, video_path, len(audio_paths))
 
         return await self.repo.get_time_memory(memory.id) or memory
 
@@ -244,15 +272,18 @@ class IngestPipeline:
             0.0, (datetime.now(timezone.utc) - _as_utc(session.created_at)).total_seconds()
         )
 
+        captured_at = datetime.now(timezone.utc)
         memory = SpaceMemory(
             partition=session.partition,
             status=MemoryStatus.PROCESSING,
-            captured_at=datetime.now(timezone.utc),
+            captured_at=captured_at,
             identify_brief=session.title or "空间采集，正在分析",
             session_id=session.id,
             title=session.title or "空间记忆",
             scene_type=session.scene_type,
             recording_duration_sec=duration_sec,
+            recording_started_at_ms=int(_as_utc(session.created_at).timestamp() * 1000),
+            captured_at_ms=int(captured_at.timestamp() * 1000),
         )
         await self.repo.create_space_memory(memory)
         await self.repo.link_session_memory(session.id, memory.id, MemoryStatus.PROCESSING)

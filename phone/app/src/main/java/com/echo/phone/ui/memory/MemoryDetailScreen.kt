@@ -27,7 +27,9 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -65,6 +67,9 @@ import com.echo.phone.data.EchoRepository
 import com.echo.phone.domain.ConversationHighlight
 import com.echo.phone.domain.EmotionalTone
 import com.echo.phone.domain.Participant
+import com.echo.phone.domain.QueryResult
+import com.echo.phone.domain.QueryResultStatus
+import com.echo.phone.domain.QueryScope
 import com.echo.phone.domain.TimeMemoryDetail
 import com.echo.phone.domain.TimeSpaceBinding
 import com.echo.phone.domain.TranscriptSegment
@@ -73,6 +78,8 @@ import com.echo.phone.domain.displayParticipants
 import com.echo.phone.domain.formatTimestamp
 import com.echo.phone.domain.toPresentation
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 
 class MemoryDetailViewModel(
     private val repo: EchoRepository,
@@ -84,19 +91,36 @@ class MemoryDetailViewModel(
     var isFavorited by mutableStateOf(false)
     var isLocked by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
+    var queryQuestion by mutableStateOf("")
+    var queryResult by mutableStateOf<QueryResult?>(null)
     private var speakerOverrides by mutableStateOf<Map<String, Participant>>(emptyMap())
+    private var loadJob: Job? = null
 
     init { load() }
 
     fun load() {
-        viewModelScope.launch {
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
             loading = true
+            var firstLoad = true
+            var polls = 0
             try {
-                val loadedMemory = repo.getMemory(memoryId)
-                memory = loadedMemory
-                isFavorited = loadedMemory.isFavorited
-                isLocked = loadedMemory.isLocked
-                bindings = repo.listMemoryBindings(memoryId)
+                while (true) {
+                    val loadedMemory = repo.getMemory(memoryId)
+                    memory = loadedMemory
+                    isFavorited = loadedMemory.isFavorited
+                    isLocked = loadedMemory.isLocked
+                    if (firstLoad) {
+                        bindings = repo.listMemoryBindings(memoryId)
+                        firstLoad = false
+                        loading = false
+                    }
+                    if (loadedMemory.status != com.echo.phone.domain.MemoryStatus.PROCESSING &&
+                        loadedMemory.status != com.echo.phone.domain.MemoryStatus.UPLOADING
+                    ) break
+                    if (polls++ >= MAX_POLLS) break
+                    delay(POLL_INTERVAL_MS)
+                }
                 error = null
             } catch (e: Exception) {
                 error = e.message
@@ -199,6 +223,17 @@ class MemoryDetailViewModel(
             try {
                 repo.rejectBinding(id)
                 bindings = repo.listMemoryBindings(memoryId)
+            } catch (e: Exception) {
+                error = e.message
+            }
+        }
+    }
+
+    fun queryInMemory() {
+        if (queryQuestion.isBlank()) return
+        viewModelScope.launch {
+            try {
+                queryResult = repo.query(queryQuestion, QueryScope.MEMORY, memoryId)
             } catch (e: Exception) {
                 error = e.message
             }
@@ -346,6 +381,27 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
                 }
             }
 
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = viewModel.queryQuestion,
+                        onValueChange = { viewModel.queryQuestion = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("在这条记忆中查询") },
+                        leadingIcon = { Icon(Icons.Default.Search, null) },
+                        singleLine = true,
+                    )
+                    Button(onClick = viewModel::queryInMemory, modifier = Modifier.fillMaxWidth()) { Text("查询") }
+                }
+            }
+
+            viewModel.queryResult?.let { result ->
+                item { QueryResultCard(result) }
+                items(result.evidences, key = { it.evidenceId }) { evidence ->
+                    Text("[${evidence.type.name}] ${evidence.content}", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
             viewModel.error?.let { message ->
                 item { Text(message, color = MaterialTheme.colorScheme.error) }
             }
@@ -405,7 +461,11 @@ fun MemoryDetailScreen(memoryId: String, onBack: () -> Unit, onNavigateSpace: (S
             dismissButton = { TextButton(onClick = { showDeleteDialog = false }) { Text("取消") } },
         )
     }
+
 }
+
+private const val POLL_INTERVAL_MS = 2_000L
+private const val MAX_POLLS = 300
 
 @Composable
 private fun MemoryContext(memory: TimeMemoryDetail, overview: String) {
@@ -546,6 +606,25 @@ private fun BindingRow(
             TextButton(onClick = { onConfirm(binding.bindingId) }) { Text("确认") }
             TextButton(onClick = { onReject(binding.bindingId) }) { Text("否定") }
         }
+    }
+}
+
+@Composable
+private fun QueryResultCard(result: QueryResult) {
+    val color = when (result.status) {
+        QueryResultStatus.CONFIRMED -> MaterialTheme.colorScheme.primaryContainer
+        QueryResultStatus.POSSIBLE -> MaterialTheme.colorScheme.secondaryContainer
+        QueryResultStatus.NOT_FOUND -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = color)) {
+        Text(
+            when (result.status) {
+                QueryResultStatus.CONFIRMED -> result.answer.orEmpty()
+                QueryResultStatus.POSSIBLE -> "可能相关：${result.uncertaintyReason ?: "证据置信度不足"}"
+                QueryResultStatus.NOT_FOUND -> "没有找到相关信息"
+            },
+            modifier = Modifier.padding(16.dp),
+        )
     }
 }
 

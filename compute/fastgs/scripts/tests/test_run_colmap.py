@@ -11,7 +11,7 @@ from run_colmap import build_colmap_command, inspect_colmap_registration  # noqa
 
 
 def write_model(model_dir, registered_names):
-    model_dir.mkdir(parents=True)
+    model_dir.mkdir(parents=True, exist_ok=True)
     write_cameras_binary(model_dir / "cameras.bin", {
         1: CameraRecord(1, 4, 640, 480, np.array([500., 500., 320., 240., 0., 0., 0., 0.])),
     })

@@ -98,6 +98,14 @@ class OptimizationParams(ParamGroup):
         self.grad_thresh = 0.0002
         self.dense = 0.001
         self.mult = 0.5      # multiplier for the compact box to control the tile number of each splat
+        # These coarse training-time passes lack the geometric safeguards used by
+        # prune_gaussians.py, so they are opt-in rather than default behavior.
+        self.final_prune_interval = 0
+        self.online_prune_interval = 0
+        self.online_prune_start_iter = 15_000
+        self.online_prune_min_opacity = 0.05
+        self.online_prune_margin = 1.2
+        self.online_prune_max_scale_ratio = 0.1
 
         self.random_background = False
         self.optimizer_type = "default"

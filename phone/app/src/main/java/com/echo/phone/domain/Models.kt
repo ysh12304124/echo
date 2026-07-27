@@ -3,6 +3,10 @@ package com.echo.phone.domain
 enum class DataPartition { WORK, QUALITY_TIME }
 enum class TimeScene { MEETING, ONSITE, QUALITY_TIME }
 enum class MemoryType { TIME, SPACE }
+
+/** 空间记忆场景类型：决定 PointCloudViewer 的默认模式（LARGE→路径浏览，OBJECT→物体环绕）。 */
+enum class SpaceSceneType { LARGE, OBJECT }
+
 enum class MemoryStatus {
     NOT_STARTED, RECORDING, PAUSED, UPLOADING, PROCESSING, COMPLETED, FAILED
 }
@@ -131,6 +135,8 @@ data class SpaceMemoryDetail(
     val posesUrl: String? = null,
     val anchorPoint: AnchorPoint? = null,
     val recordingDurationSec: Float = 0f,
+    val sceneSummary: String = "",
+    val loopAngle: Float? = null,
 )
 
 data class QueryEvidence(
@@ -149,6 +155,23 @@ data class QueryResult(
     val evidences: List<QueryEvidence>,
     val sources: List<QuerySource> = emptyList(),
     val uncertaintyReason: String?,
+)
+
+data class VoiceQueryResult(
+    val transcript: String,
+    val durationMs: Int = 0,
+    val asrAvgLogprob: Double?,
+    val asrAccepted: Boolean,
+    val rejectionReason: String?,
+    val result: QueryResult?,
+)
+
+data class VoiceTranscriptionResult(
+    val transcript: String,
+    val durationMs: Int,
+    val asrAvgLogprob: Double?,
+    val asrAccepted: Boolean,
+    val rejectionReason: String?,
 )
 
 data class PersonSummary(
@@ -194,6 +217,7 @@ data class SpaceAnchor(
     val anchorId: String,
     val name: String,
     val anchorType: String,
+    val position: AnchorPoint? = null,
 )
 
 data class DeviceStatus(

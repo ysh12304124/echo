@@ -17,6 +17,7 @@ from plyfile import PlyData
 from anchor_calculator import calculate_anchor, point_cloud_bbox_center
 from colmap_model_io import ImageRecord, read_images_binary
 from pipeline_stage import append_event, utc_now, write_stage_status
+from run_prune import find_pruned_outputs
 
 
 @dataclass(frozen=True)
@@ -140,8 +141,9 @@ def run_export_stage(args: argparse.Namespace) -> int:
     started_at = utc_now()
     write_stage_status(status_path, {"version": 1, "job_id": job_id, "stage": "export", "status": "running", "started_at": started_at, "finished_at": None, "error_code": None, "message": "Export is running.", "warnings": []})
     try:
-        output_dir = export_outputs(job_dir / "colmap_gravity_aligned", job_dir / "fastgs_model" / "point_cloud" / ("iteration_%d" % args.iterations) / "point_cloud.ply", job_dir / "input", job_dir / "outputs", job_dir / "imu_manifest.json")
-        payload = {"version": 1, "job_id": job_id, "stage": "export", "status": "completed", "started_at": started_at, "finished_at": utc_now(), "error_code": None, "message": "Final outputs exported.", "output": {"output_dir": str(output_dir)}, "warnings": []}
+        pruned = find_pruned_outputs(job_dir / "fastgs_model", args.iterations)
+        output_dir = export_outputs(job_dir / "colmap_gravity_aligned", pruned["ply"], job_dir / "input", job_dir / "outputs", job_dir / "imu_manifest.json")
+        payload = {"version": 1, "job_id": job_id, "stage": "export", "status": "completed", "started_at": started_at, "finished_at": utc_now(), "error_code": None, "message": "Final pruned outputs exported.", "output": {"output_dir": str(output_dir), "source_ply": str(pruned["ply"]), "prune_stats": str(pruned["stats"])}, "warnings": []}
         write_stage_status(status_path, payload)
         append_event(events_path, {"timestamp": payload["finished_at"], "job_id": job_id, "stage": "export", "status": "completed", "output_dir": str(output_dir)})
         return 0

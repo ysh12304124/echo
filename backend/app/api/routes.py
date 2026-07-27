@@ -92,6 +92,45 @@ def _navigation_summary_response(memory) -> Optional[NavigationSummary]:
     return nav
 
 
+def _time_memory_detail_sections(memory) -> tuple[list[dict], list[dict], list[dict]]:
+    entries = (
+        memory.navigation_summary.evidence_entries
+        if memory.navigation_summary
+        else []
+    )
+    if not isinstance(entries, list):
+        return [], [], []
+    participants = [entry for entry in entries if isinstance(entry, dict) and entry.get("type") == "participant"]
+    def participant(entry: dict) -> Optional[dict]:
+        name = entry.get("name")
+        participant_id = entry.get("participant_id") or name
+        if not name or not participant_id:
+            return None
+        value = {"participant_id": participant_id, "name": name}
+        if entry.get("avatar_url"):
+            value["avatar_url"] = entry["avatar_url"]
+        if entry.get("person_id"):
+            value["person_id"] = entry["person_id"]
+        return value
+
+    highlights = []
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("type") != "conversation_highlight":
+            continue
+        value = dict(entry)
+        value["participant"] = participant(entry)
+        highlights.append(value)
+
+    transcripts = []
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("type") != "transcript":
+            continue
+        value = dict(entry)
+        value["participant"] = participant(entry)
+        transcripts.append(value)
+    return participants, highlights, transcripts
+
+
 # --- Ingest ---
 
 @router.post("/ingest/sessions", response_model=IngestSessionResponse, status_code=201)
@@ -355,6 +394,7 @@ async def get_memory(memory_id: UUID, repo: MemoryRepository = Depends(get_repo)
     memory = await repo.get_time_memory(memory_id)
     if not memory:
         raise HTTPException(404, "Memory not found")
+    participants, highlights, transcripts = _time_memory_detail_sections(memory)
     return TimeMemoryDetailResponse(
         memory_id=memory.id,
         title=memory.title,
@@ -370,6 +410,9 @@ async def get_memory(memory_id: UUID, repo: MemoryRepository = Depends(get_repo)
         is_favorited=memory.is_favorited,
         is_locked=memory.is_locked,
         key_frames=_format_key_frames(memory.key_frames or []),
+        participants=participants,
+        conversation_highlights=highlights,
+        transcript_segments=transcripts,
     )
 
 

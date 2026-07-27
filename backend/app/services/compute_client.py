@@ -17,6 +17,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from functools import lru_cache
+import os
+from pathlib import Path
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
@@ -32,6 +34,11 @@ from app.repositories.memory_repo import MemoryRepository
 log = get_logger("compute_client")
 
 _SUBMIT_TIMEOUT_SECONDS = 5.0
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _runtime_path(env_name: str, relative: str) -> str:
+    return os.getenv(env_name) or str((_REPO_ROOT / relative).resolve())
 
 
 @dataclass
@@ -50,6 +57,21 @@ class TimeAnalyzeJob:
     partition: DataPartition
     video_path: Optional[str]
     audio_paths: list[str]
+    models_root: str = field(
+        default_factory=lambda: _runtime_path(
+            "TIME_MEMORY_MODELS_ROOT", "compute/models/speaker-fusion"
+        )
+    )
+    lrasd_root: str = field(
+        default_factory=lambda: _runtime_path(
+            "TIME_MEMORY_LRASD_ROOT", "compute/models/speaker-fusion/LR-ASD"
+        )
+    )
+    output_root: str = field(
+        default_factory=lambda: _runtime_path(
+            "TIME_MEMORY_OUTPUT_ROOT", "backend/data/blobs/time-memory"
+        )
+    )
     job_id: str = field(default_factory=lambda: f"job-{uuid4()}")
 
 
@@ -62,6 +84,8 @@ class SpaceAnalyzeJob:
     imu_path: Optional[str]
     scene_type: Optional[str] = None
     recording_duration_sec: float = 0.0
+    recording_started_at_ms: int = 0
+    captured_at_ms: int = 0
     job_id: str = field(default_factory=lambda: f"job-{uuid4()}")
 
 
@@ -121,7 +145,13 @@ class HttpComputeClient(ComputeClient):
                 "memory_id": str(job.memory_id),
                 "session_id": str(job.session_id),
                 "partition": job.partition.value,
-                "inputs": {"video_path": job.video_path, "audio_paths": job.audio_paths},
+                "inputs": {
+                    "video_path": job.video_path,
+                    "audio_paths": job.audio_paths,
+                    "models_root": job.models_root,
+                    "lrasd_root": job.lrasd_root,
+                    "output_root": job.output_root,
+                },
                 "callback_url": self._callback_url("time"),
             },
             f"session={job.session_id} memory={job.memory_id} type=time",
@@ -140,6 +170,8 @@ class HttpComputeClient(ComputeClient):
                     "imu_path": job.imu_path,
                     "scene_type": job.scene_type,
                     "recording_duration_sec": job.recording_duration_sec,
+                    "recording_started_at_ms": job.recording_started_at_ms,
+                    "captured_at_ms": job.captured_at_ms,
                 },
                 "callback_url": self._callback_url("space"),
             },
@@ -252,7 +284,11 @@ async def apply_audio_result(
 
 
 async def apply_time_result(
-    repo: MemoryRepository, memory_id: UUID, status: str, result: dict[str, Any]
+    repo: MemoryRepository,
+    memory_id: UUID,
+    status: str,
+    result: dict[str, Any],
+    providers: ProviderFactory | None = None,
 ) -> None:
     memory = await repo.get_time_memory(memory_id)
     if not memory:
@@ -264,6 +300,13 @@ async def apply_time_result(
         return
 
     result = result or {}
+    providers = providers or get_provider_factory()
+    avatar_urls = await _publish_time_memory_faces(
+        providers,
+        memory_id,
+        result.get("faces"),
+    )
+    result = normalize_time_result(result, avatar_urls=avatar_urls)
     nav_summary = None
     if isinstance(result.get("navigation_summary"), dict):
         try:
@@ -285,15 +328,207 @@ async def apply_time_result(
     if memory.session_id:
         await repo.link_session_memory(memory.session_id, memory_id, MemoryStatus.COMPLETED)
 
-    # events/faces -> Event/Person/Binding 落库属于阶段四(需先与算力实现方钉死字段)，
-    # 本期只记录日志，避免用不稳定的占位结构写坏数据。
     events, faces = result.get("events") or [], result.get("faces") or []
     if events or faces:
         log.info(
-            "时间记忆回调含 events/faces(占位,暂不落库) memory=%s events=%d faces=%d",
+            "时间记忆回调含 events/faces memory=%s events=%d faces=%d",
             memory_id, len(events), len(faces),
         )
+
+    transcript = str(
+        (result.get("audio_evidence") or {}).get("transcript")
+        or " ".join(
+            str(item.get("text") or item.get("content") or "")
+            for item in result.get("conversation") or []
+        )
+    ).strip()
+    if transcript:
+        await repo.delete_evidences_by_type(memory_id, EvidenceType.TRANSCRIPT)
+        ev = Evidence(
+            memory_id=memory_id,
+            type=EvidenceType.TRANSCRIPT,
+            content=transcript,
+            timestamp_ms=0,
+            confidence=ConfidenceLevel.HIGH,
+        )
+        await repo.save_evidence(ev)
+        embedding = providers.embedding()
+        vector_store = providers.vector_store()
+        emb = await embedding.embed(transcript)
+        await vector_store.upsert(
+            str(ev.id),
+            emb.vector,
+            {"memory_id": str(memory_id), "partition": memory.partition.value, "type": "transcript"},
+        )
+
     log.info("时间记忆分析回调完成 memory=%s session=%s", memory_id, memory.session_id)
+
+
+async def _publish_time_memory_faces(
+    providers: ProviderFactory,
+    memory_id: UUID,
+    faces: Any,
+) -> dict[str, str]:
+    if not isinstance(faces, list):
+        return {}
+
+    blob = providers.blob_store()
+    avatar_urls: dict[str, str] = {}
+    for index, face in enumerate(faces, 1):
+        if not isinstance(face, dict):
+            continue
+        name = str(face.get("name") or face.get("speaker") or f"speaker-{index}")
+        existing_url = face.get("avatar_url")
+        if existing_url:
+            avatar_urls[name] = str(existing_url)
+            continue
+        crop_path = face.get("crop_path") or face.get("path")
+        if not crop_path:
+            continue
+        path = Path(str(crop_path)).expanduser()
+        if not path.is_file():
+            log.warning("时间记忆头像文件不存在 memory=%s path=%s", memory_id, path)
+            continue
+        suffix = path.suffix.lower() if path.suffix else ".jpg"
+        key = f"time-memory/{memory_id}/faces/{index}-{_safe_media_name(name)}{suffix}"
+        try:
+            await blob.save(key, path.read_bytes(), "image/jpeg")
+        except OSError as exc:
+            log.warning("时间记忆头像保存失败 memory=%s path=%s: %s", memory_id, path, exc)
+            continue
+        avatar_urls[name] = blob.get_url(key)
+    return avatar_urls
+
+
+def _safe_media_name(value: str) -> str:
+    return "".join(char if char.isalnum() or char in "-_" else "_" for char in value)[:80] or "speaker"
+
+
+def _segment_entry(segment: dict[str, Any], index: int, avatar_urls: dict[str, str]) -> dict[str, Any]:
+    speaker = str(
+        segment.get("speaker")
+        or segment.get("participant_id")
+        or segment.get("name")
+        or "unknown"
+    )
+    text = str(segment.get("text") or segment.get("content") or "")
+    start_raw = segment.get("start_ms")
+    if start_raw is None:
+        start_raw = float(segment.get("start") or segment.get("start_sec") or 0) * 1000
+    entry = {
+        "type": "transcript",
+        "segment_id": str(segment.get("segment_id") or f"segment-{index}"),
+        "participant_id": str(segment.get("participant_id") or speaker),
+        "name": str(segment.get("name") or speaker),
+        "content": text,
+        "timestamp_ms": round(float(start_raw or 0)),
+    }
+    person_id = segment.get("person_id")
+    avatar_url = segment.get("avatar_url") or avatar_urls.get(speaker)
+    if person_id:
+        entry["person_id"] = person_id
+    if avatar_url:
+        entry["avatar_url"] = avatar_url
+    return entry
+
+
+def normalize_time_result(
+    result: dict[str, Any],
+    *,
+    avatar_urls: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Normalize demo/future time-memory output to the phone evidence contract."""
+    normalized = dict(result or {})
+    avatar_urls = avatar_urls or {}
+    navigation = dict(normalized.get("navigation_summary") or {})
+    entries: list[dict[str, Any]] = []
+
+    participants = normalized.get("participants") or []
+    for index, participant in enumerate(participants, 1):
+        if isinstance(participant, str):
+            participant = {"name": participant}
+        if not isinstance(participant, dict):
+            continue
+        name = str(participant.get("name") or participant.get("speaker") or f"speaker-{index}")
+        entries.append(
+            {
+                "type": "participant",
+                "participant_id": str(participant.get("participant_id") or name),
+                "person_id": participant.get("person_id"),
+                "name": name,
+                "avatar_url": participant.get("avatar_url") or avatar_urls.get(name),
+            }
+        )
+
+    highlights = normalized.get("conversation_highlights") or normalized.get("highlights") or []
+    for index, highlight in enumerate(highlights, 1):
+        if not isinstance(highlight, dict):
+            continue
+        participant = highlight.get("participant") if isinstance(highlight.get("participant"), dict) else {}
+        name = str(
+            highlight.get("name")
+            or highlight.get("speaker")
+            or participant.get("name")
+            or "unknown"
+        )
+        entries.append(
+            {
+                "type": "conversation_highlight",
+                "highlight_id": str(highlight.get("highlight_id") or f"highlight-{index}"),
+                "participant_id": str(highlight.get("participant_id") or participant.get("participant_id") or name),
+                "person_id": highlight.get("person_id") or participant.get("person_id"),
+                "name": name,
+                "avatar_url": highlight.get("avatar_url") or participant.get("avatar_url") or avatar_urls.get(name),
+                "emotion": highlight.get("emotion") or highlight.get("mood") or "neutral",
+                "content": str(highlight.get("content") or highlight.get("text") or ""),
+                "timestamp_ms": round(float(highlight.get("timestamp_ms") or 0)),
+            }
+        )
+
+    segments = normalized.get("transcript_segments") or normalized.get("conversation") or []
+    if not segments:
+        segments = [entry for entry in navigation.get("evidence_entries") or [] if isinstance(entry, dict) and entry.get("type") == "transcript"]
+    for index, segment in enumerate(segments, 1):
+        if isinstance(segment, dict):
+            entries.append(_segment_entry(segment, index, avatar_urls))
+
+    known_names = {entry.get("name") for entry in entries if entry.get("type") == "participant"}
+    for name, avatar_url in avatar_urls.items():
+        if name not in known_names:
+            entries.insert(
+                0,
+                {"type": "participant", "participant_id": name, "name": name, "avatar_url": avatar_url},
+            )
+
+    events = normalized.get("events") or []
+    key_moments: list[dict[str, Any]] = []
+    for index, moment in enumerate(navigation.get("key_moments") or [], 1):
+        if not isinstance(moment, dict):
+            continue
+        timestamp_ms = int(moment.get("timestamp_ms") or 0)
+        key_moments.append(
+            {
+                "id": str(moment.get("id") or f"moment-{index}"),
+                "label": str(moment.get("label") or moment.get("description") or "关键瞬间"),
+                "time_offset_seconds": int(moment.get("time_offset_seconds") or timestamp_ms // 1000),
+            }
+        )
+    for index, event in enumerate(events, 1):
+        if not isinstance(event, dict):
+            continue
+        timestamp_ms = int(event.get("start_ms") or event.get("timestamp_ms") or 0)
+        key_moments.append(
+            {
+                "id": str(event.get("id") or f"event-{index}"),
+                "label": str(event.get("label") or event.get("task") or event.get("event_type") or "关键事件"),
+                "time_offset_seconds": timestamp_ms // 1000,
+            }
+        )
+
+    navigation["key_moments"] = key_moments
+    navigation["evidence_entries"] = entries
+    normalized["navigation_summary"] = navigation
+    return normalized
 
 
 async def apply_space_result(

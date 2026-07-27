@@ -14,25 +14,26 @@ from pipeline_stage import append_event, read_stage_status, utc_now
 from run_fastgs import find_trained_ply
 
 
-STAGES = ("colmap", "alignment", "fastgs", "export")
+STAGES = ("colmap", "alignment", "fastgs", "prune", "export")
 
 
 def stage_command(stage: str, args: argparse.Namespace) -> list[str]:
     root = Path(__file__).resolve().parent
     common = [sys.executable, str(root / {
         "colmap": "run_colmap.py",
-        "alignment": "align_colmap.py",
-        "fastgs": "run_fastgs.py",
-        "export": "export_outputs.py",
+            "alignment": "align_colmap.py",
+            "fastgs": "run_fastgs.py",
+            "prune": "run_prune.py",
+            "export": "export_outputs.py",
     }[stage]), "--job-dir", str(Path(args.job_dir).resolve())]
     if args.job_id:
         common += ["--job-id", args.job_id]
-    if stage in {"colmap", "fastgs"}:
+    if stage in {"colmap", "fastgs", "prune"}:
         common += ["--fastgs-dir", str(Path(args.fastgs_dir).resolve())]
     if stage == "colmap":
         common += [
             "--timeout-seconds", str(args.timeout_seconds),
-            "--colmap-executable", getattr(args, "colmap_executable", "/home/liangjiahua/colmap-cuda-ceres/bin/colmap"),
+            "--colmap-executable", getattr(args, "colmap_executable", "/home/asus/opt/colmap-cuda-ceres/bin/colmap"),
             "--python-executable", getattr(args, "python_executable", "python"),
             "--max-num-features", str(getattr(args, "max_num_features", 8192)),
         ]
@@ -55,6 +56,20 @@ def stage_command(stage: str, args: argparse.Namespace) -> list[str]:
             "--timeout-seconds", str(args.timeout_seconds),
             "--python-executable", getattr(args, "python_executable", "python"),
         ]
+        if getattr(args, "conda_executable", None) and getattr(args, "conda_env", None):
+            common += ["--conda-executable", args.conda_executable, "--conda-env", args.conda_env]
+        if getattr(args, "cuda_lib_dir", None):
+            common += ["--cuda-lib-dir", args.cuda_lib_dir]
+    elif stage == "prune":
+        common += [
+            "--iterations", str(args.iterations),
+                "--max-prune-ratio", str(getattr(args, "prune_max_ratio", 0.01)),
+                "--finetune-iterations", str(getattr(args, "prune_finetune_iterations", 800)),
+            "--timeout-seconds", str(args.timeout_seconds),
+            "--python-executable", getattr(args, "python_executable", "python"),
+        ]
+        if getattr(args, "prune_evaluate_psnr", True):
+            common.append("--evaluate-psnr")
         if getattr(args, "conda_executable", None) and getattr(args, "conda_env", None):
             common += ["--conda-executable", args.conda_executable, "--conda-env", args.conda_env]
         if getattr(args, "cuda_lib_dir", None):
@@ -98,7 +113,14 @@ def _validate_resume_point(job_dir: Path, resume_from: str, iterations: int) -> 
     fastgs_status = read_stage_status(job_dir / "stages" / "fastgs" / "status.json")
     if fastgs_status["status"] not in {"completed", "completed_with_warnings"}:
         raise ValueError("cannot resume from export: FastGS stage is not complete")
-    find_trained_ply(job_dir / "fastgs_model", iterations)
+    if resume_from == "prune":
+        find_trained_ply(job_dir / "fastgs_model", iterations)
+        return
+    prune_status = read_stage_status(job_dir / "stages" / "prune" / "status.json")
+    if prune_status["status"] not in {"completed", "completed_with_warnings"}:
+        raise ValueError("cannot resume from export: prune stage is not complete")
+    from run_prune import find_pruned_outputs
+    find_pruned_outputs(job_dir / "fastgs_model", iterations)
 
 
 def run_pipeline(args: argparse.Namespace) -> int:
@@ -146,12 +168,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--conda-executable", default="conda")
     parser.add_argument("--conda-env", default="fastgs")
     parser.add_argument("--python-executable", default="python")
-    parser.add_argument("--colmap-executable", default="/home/liangjiahua/colmap-cuda-ceres/bin/colmap")
+    parser.add_argument("--colmap-executable", default="/home/asus/opt/colmap-cuda-ceres/bin/colmap")
     parser.add_argument("--max-num-features", type=int, default=8192)
     parser.add_argument("--feature-gpu", action="store_true")
     parser.add_argument("--matching-gpu", action="store_true", default=True)
     parser.add_argument("--mapper-gpu", action="store_true", default=True)
-    parser.add_argument("--cuda-lib-dir", default="/home/liangjiahua/miniconda3/envs/dgsg/targets/x86_64-linux/lib")
+    parser.add_argument("--cuda-lib-dir", default="/usr/local/cuda-12.8/lib64")
+    parser.add_argument("--prune-max-ratio", type=float, default=0.01)
+    parser.add_argument("--prune-finetune-iterations", type=int, default=800)
+    parser.add_argument("--prune-evaluate-psnr", action="store_true", default=True)
     return parser.parse_args()
 
 

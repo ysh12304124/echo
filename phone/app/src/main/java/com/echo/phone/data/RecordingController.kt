@@ -31,6 +31,34 @@ data class UploadStatus(
     val imuDone: Boolean = false,
 )
 
+/** 旁路 SPACE 会话状态：TIME 录制中用户开启 SPACE 时,把后续视频分片落本地,结束时上传。 */
+private data class InlineSpaceSession(
+    val sessionId: String,
+    val sceneType: SpaceSceneType,
+    val cacheFile: File,
+    val raf: RandomAccessFile,
+    var closed: Boolean = false,
+    var finalizing: Boolean = false,
+    var finalized: Boolean = false,
+)
+
+/** 用眼镜端提供的绝对 offset 覆盖 MP4 的最终头部，保留 offset 之前的 ftyp/free。 */
+internal fun applyVideoPatch(raf: RandomAccessFile, offset: Long, bytes: ByteArray) {
+    require(offset >= 0) { "video patch offset must be non-negative" }
+    raf.seek(offset)
+    raf.write(bytes)
+}
+
+/** 将视频尾部分片追加到缓存文件末尾。调用方负责保证文件处于可写状态。 */
+internal fun appendVideoChunk(raf: RandomAccessFile, bytes: ByteArray) {
+    raf.seek(raf.length())
+    raf.write(bytes)
+}
+
+/** SPACE 本地文件只有拿到最终头部且收到视频结束标志后才允许 finalize。 */
+internal fun canFinalizeSpace(headerPatchReceived: Boolean, videoDone: Boolean): Boolean =
+    headerPatchReceived && videoDone
+
 /**
  * SPACE 时间标记：只记录开始/结束时间戳(相对 TIME 录制起点的毫秒),
  * TIME 结束后按范围从完整视频剪辑出 SPACE MP4 上传。

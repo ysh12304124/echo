@@ -73,6 +73,7 @@ class EchoApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         EchoLog.init(this)
+        ApiClient.init(this)
         repository = EchoRepository(ApiClient.service)
         glassesConnection = if (BuildConfig.USE_MOCK_GLASSES) {
             MockGlassesConnection(appScope)
